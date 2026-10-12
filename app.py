@@ -5,14 +5,13 @@ Endpoints:
   GET  /health         - health check + pi config status + task overview
   GET  /               - short info page
 
-Nextcloud 34 bot protocol (see nextcloud/spreed):
+Nextcloud Talk bot protocol (https://nextcloud-talk.readthedocs.io/en/latest/bots/):
   * incoming webhook: W3C activity object, verified with
     X-Nextcloud-Talk-Random + X-Nextcloud-Talk-Signature
     (HMAC-SHA256(random + raw body, TALK_BOT_SECRET))
-  * posting: official bot API POST /apps/sparkle/api/v1/chat/{roomToken}
+  * posting: official bot API
+    POST /ocs/v2.php/apps/spreed/api/v1/bot/{roomToken}/message
     with the same signature headers (bot feature "response")
-  * legacy bot payload ({token, room_id, message} + user credentials) is
-    still accepted as a fallback.
 
 Behaviour:
   * Every incoming message is queued per bot+room (one worker thread per
@@ -50,11 +49,6 @@ NEXTCLOUD_URL = os.environ.get("NEXTCLOUD_URL", "").rstrip("/")
 # Secret given to `occ talk:bot:install <name> <secret> <url> ...`
 # (40-128 chars). Verifies incoming webhooks and signs outgoing API calls.
 TALK_BOT_SECRET = os.environ.get("TALK_BOT_SECRET", "")
-
-# Optional legacy fallback: user credentials (app password) for the classic
-# bot payload. Only used when the incoming payload has no signature headers.
-BOT_USER = os.environ.get("BOT_USER", "")
-BOT_APP_PASSWORD = os.environ.get("BOT_APP_PASSWORD", "")
 
 BOTS_DIR = os.environ.get("BOTS_DIR", "./bots")
 PI_BIN = os.environ.get("PI_BIN", "pi")
@@ -111,56 +105,21 @@ def sign_request(secret, body):
 
 # ------------------------------------------------------- nextcloud api ---
 
-def legacy_auth():
-    if BOT_USER and BOT_APP_PASSWORD:
-        return (BOT_USER, BOT_APP_PASSWORD)
-    return None
-
-
-def _nc_get(path):
-    headers = {}
-    auth = legacy_auth()
-    r = requests.get(f"{NEXTCLOUD_URL}/ocs/v2.php{path}",
-                     headers=headers, auth=auth, timeout=30)
-    r.raise_for_status()
-    return r.json()["ocs"]["data"]
-
-
-def get_room_name(room_id):
-    """Legacy path only (classic payload gives a numeric room id)."""
-    try:
-        data = _nc_get(f"/apps/sparkle/api/v1/room/{room_id}")
-        return (data.get("name") or "").strip()
-    except Exception as e:
-        log.warning("room name lookup failed for %s: %s", room_id, e)
-        return None
-
-
-def post_message(room, message, room_is_token=True):
-    """Post a chat message (see https://nextcloud-talk.readthedocs.io/en/latest/bots/).
-
-    New protocol (NC >= 27.1 / spreed bot API):
-        POST /ocs/v2.php/apps/spreed/api/v1/bot/{roomToken}/message
-        body = JSON {"message": ...}, signed over random + raw message
-    Legacy (classic bot payload):
-        POST /ocs/v2.php/apps/sparkle/api/v1/chat/{roomId} with user auth.
-    """
-    if room_is_token and TALK_BOT_SECRET:
-        url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
-               f"/bot/{room}/message")
-        headers = sign_request(TALK_BOT_SECRET, message)  # sign raw message
-        body = json.dumps({"message": message})
-        r = requests.post(url, data=body.encode(), headers=headers, timeout=30)
-    else:
-        url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/sparkle/api/v1/chat/{room}"
-        r = requests.post(url, data={"message": message},
-                          auth=legacy_auth(), timeout=30)
+def post_message(room, message):
+    """Post a chat message via the signed Talk bot API
+    (https://nextcloud-talk.readthedocs.io/en/latest/bots/).
+    room must be the conversation token."""
+    url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
+           f"/bot/{room}/message")
+    headers = sign_request(TALK_BOT_SECRET, message)  # sign raw message
+    r = requests.post(url, data=json.dumps({"message": message}).encode(),
+                      headers=headers, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")
 
 
 def folder_for_room(room_id, room_name):
-    """Sanitised room name, fallback to numeric room id / token."""
+    """Sanitised room name, fallback to the room token."""
     clean = re.sub(r"[^a-zA-Z0-9_-]+", "-", room_name or "").strip("-").lower()
     return clean or f"room-{room_id}"
 
@@ -288,9 +247,8 @@ def run_job(key, bot, job):
                 quoted = "\n".join(
                     "> " + ln if ln else ">"
                     for ln in thinking[:4000].splitlines())
-                post_message(job["room"], f"\U0001f914 {quoted}",
-                             job["room_is_token"])
-            post_message(job["room"], answer, job["room_is_token"])
+                post_message(job["room"], f"\U0001f914 {quoted}")
+            post_message(job["room"], answer)
             task["status"] = "done"
             break
     except Exception as e:
@@ -299,8 +257,7 @@ def run_job(key, bot, job):
         task["error"] = str(e)
         try:
             post_message(job["room"],
-                         f"\u26a0\ufe0f pi run failed: {e}"[:2000],
-                         job["room_is_token"])
+                         f"\u26a0\ufe0f pi run failed: {e}"[:2000])
         except Exception as post_err:
             log.error("could not post failure notice: %s", post_err)
     finally:
@@ -415,9 +372,9 @@ def health():
 
 
 def _parse_payload(payload):
-    """Return (message, room, room_name, room_is_token, sender) or None
-    when the payload is not an actionable chat message."""
-    # --- new protocol (NC >= 34): W3C activity object
+    """Return (message, room, room_name, sender) or None
+    when the payload is not an actionable chat message.
+    room is the conversation token (from target.id)."""
     obj = payload.get("object") or {}
     target = payload.get("target") or {}
     if obj.get("type") == "Note" and target.get("type") == "Collection":
@@ -433,15 +390,7 @@ def _parse_payload(payload):
             message = ""
         actor = payload.get("actor") or {}
         return (message, room_token, (target.get("name") or "").strip(),
-                True, (actor.get("name") or "").strip() or "user")
-
-    # --- legacy protocol: {token, room_id, message, ...}
-    if "room_id" in payload:
-        room_name = None
-        return ((payload.get("message") or payload.get("command") or "").strip(),
-                payload["room_id"], room_name, False,
-                (payload.get("sender_display_name")
-                 or payload.get("sender") or "user").strip())
+                (actor.get("name") or "").strip() or "user")
 
     return None
 
@@ -456,24 +405,17 @@ def webhook(bot):
     random_str = request.headers.get("X-Nextcloud-Talk-Random", "")
     payload = request.get_json(silent=True) or {}
 
-    if signature:
-        # new protocol: verify HMAC signature with the bot secret
-        if not TALK_BOT_SECRET \
-                or not verify_webhook_signature(TALK_BOT_SECRET, random_str,
-                                                signature, raw_body):
-            log.warning("webhook %s: bad or missing signature", bot)
-            return jsonify({"error": "bad signature"}), 403
-    else:
-        # legacy protocol: no signature headers; only allowed when user
-        # credentials for the OCS API are configured
-        if not legacy_auth():
-            return jsonify({"error": "legacy payload requires "
-                                     "BOT_USER/BOT_APP_PASSWORD"}), 403
+    if not signature \
+            or not TALK_BOT_SECRET \
+            or not verify_webhook_signature(TALK_BOT_SECRET, random_str,
+                                            signature, raw_body):
+        log.warning("webhook %s: missing or bad signature", bot)
+        return jsonify({"error": "bad signature"}), 403
 
     parsed = _parse_payload(payload)
     if parsed is None:
         return jsonify({"ignored": "not a chat message"}), 200
-    message, room, room_name, room_is_token, sender = parsed
+    message, room, room_name, sender = parsed
     if not message:
         return jsonify({"ignored": "empty message"}), 200
 
@@ -485,10 +427,6 @@ def webhook(bot):
                                  "container once and /login, or add a "
                                  f"models.json to {config_file}"}), 503
 
-    # legacy numeric room ids need a name lookup
-    if not room_is_token:
-        room_name = room_name or get_room_name(room)
-
     folder = folder_for_room(room, room_name)
     cwd = os.path.join(BOTS_DIR, bot, "rooms", folder)
     os.makedirs(cwd, exist_ok=True)
@@ -496,7 +434,6 @@ def webhook(bot):
     key = f"{bot}/{folder}"
     enqueue(key, bot, {
         "room": room,
-        "room_is_token": room_is_token,
         "room_id": str(room),
         "message": message,
         "sender": sender,

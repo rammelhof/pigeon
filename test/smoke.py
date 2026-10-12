@@ -1,10 +1,10 @@
 """Local smoke test: fake pi + fake Nextcloud (no docker needed).
 
 Run:  python test/smoke.py
-Covers: pi-config gate, HMAC webhook verification, new (NC34) + legacy
-payload parsing, queueing, pi JSONL parsing (thinking + answer),
-posting via the bot API, retry with --continue, heartbeat timeout
-kill, /health output.
+Covers: pi-config gate, HMAC webhook verification, payload parsing,
+queueing, pi JSONL parsing (thinking + answer), posting via the bot API
+(with outgoing signature verification), retry with --continue, heartbeat
+timeout kill, /health output.
 """
 import hashlib
 import hmac
@@ -29,8 +29,6 @@ SECRET = "x" * 64
 os.environ.update({
     "NEXTCLOUD_URL": "http://127.0.0.1:8099",
     "TALK_BOT_SECRET": SECRET,
-    "BOT_USER": "legacyuser",
-    "BOT_APP_PASSWORD": "legacypass",
     "PI_BIN": "fake-pi",
     "BOTS_DIR": BOTS_TEST,
     "PI_CODING_AGENT_DIR": PI_CFG,
@@ -178,11 +176,6 @@ def signed_webhook(bot, payload, secret=SECRET, raw_override=None):
     })
 
 
-def legacy_webhook(bot, payload):
-    return http(f"/webhook/{bot}", body=json.dumps(payload), method="POST",
-                headers={"Content-Type": "application/json"})
-
-
 def tasks():
     _, h = get("/health")
     return h
@@ -265,13 +258,11 @@ check("hang killed by heartbeat, continued",
 check("bot2 has own rooms dir",
       os.path.isdir(os.path.join(BOTS_TEST, "bot2", "rooms", "hang-room")))
 
-# 9. legacy payload (no signature headers, user credentials configured)
-s, body = legacy_webhook("bot3", {"token": "whatever", "room_id": 789,
-                                  "message": "hello legacy"})
-check("legacy webhook 202", s == 202, str(s))
-t = wait_room_done("bot3/rooms/dev-team")
-check("legacy task done (room name via API)",
-      bool(t) and t["status"] == "done", str(t))
+s, body = signed_webhook("bot3", new_payload("hi via bot3", room_token="tok3nabc",
+                                          room_name="Team Bot"))
+t = wait_room_done("bot3/rooms/team-bot")
+check("bot3 gets own folder + session",
+      s == 202 and bool(t) and t["status"] == "done", f"{s} {body} {t}")
 
 print()
 if failures:

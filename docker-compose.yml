@@ -10,9 +10,6 @@ services:
       NEXTCLOUD_URL: ${NEXTCLOUD_URL}
       # secret from `occ talk:bot:install <name> <secret> <url> ...`
       TALK_BOT_SECRET: ${TALK_BOT_SECRET}
-      # optional: legacy classic-bot payload fallback
-      BOT_USER: ${BOT_USER:-}
-      BOT_APP_PASSWORD: ${BOT_APP_PASSWORD:-}
       # behaviour
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PI_TIMEOUT: ${PI_TIMEOUT:-600}

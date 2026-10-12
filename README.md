@@ -18,9 +18,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `X-Nextcloud-Talk-Random`/`X-Nextcloud-Talk-Signature`
   (HMAC-SHA256 over `random + raw body`, key = bot secret); pigeon
   verifies it. The W3C-style payload already contains the room name and
-  room token, so no extra API calls are needed. (The legacy classic-bot
-  payload `{token, room_id, message}` still works as a fallback if
-  `BOT_USER`/`BOT_APP_PASSWORD` are set.)
+  room token, so no extra API calls are needed.
   Each message is put in a per-room queue; **one worker thread per room**
   runs pi, so sessions are never interleaved.
 * Every Talk room gets its own folder under `bots/<bot>/rooms/`, named
@@ -121,7 +119,6 @@ All configuration is via environment variables (see `.env.example`):
 |---|---|---|
 | `NEXTCLOUD_URL` | – | Base URL of Nextcloud (no trailing slash) |
 | `TALK_BOT_SECRET` | – | Secret from `occ talk:bot:install <name> <secret> <url>` (40-128 chars); verifies webhooks and signs bot API calls |
-| `BOT_USER` / `BOT_APP_PASSWORD` | – | optional, legacy classic-bot payload fallback (user + app password) |
 | `LOG_LEVEL` | `INFO` | python logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
 | `PI_TIMEOUT` | `600` | Seconds before the heartbeat kills a pi run |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeat checks |

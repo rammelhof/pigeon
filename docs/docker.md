@@ -139,7 +139,6 @@ All in `.env` (compose reads it automatically):
 |---|---|---|
 | Nextcloud | `NEXTCLOUD_URL` | e.g. `https://cloud.example.com` |
 | Nextcloud | `TALK_BOT_SECRET` | Secret from `occ talk:bot:install <name> <secret> <url>` (40-128 chars). Pigeon verifies the HMAC signature of every incoming webhook with it and signs its own calls to the Talk bot API with it |
-| Nextcloud | `BOT_USER`, `BOT_APP_PASSWORD` | optional, only for the legacy classic-bot payload (old Nextcloud / old bot format) |
 | logging | `LOG_LEVEL` | `DEBUG` / `INFO` (default) / `WARNING` / `ERROR` — output goes to stdout, read with `docker compose logs -f` |
 | behaviour | `PI_TIMEOUT` | heartbeat kills a pi run after this many seconds |
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
@@ -197,7 +196,6 @@ per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
 | Symptom | Check |
 |---|---|
 | `403 bad signature` in logs | `TALK_BOT_SECRET` in `.env` ≠ secret in `occ talk:bot:install` |
-| `403 bad token` in logs | legacy payload without `BOT_USER`/`BOT_APP_PASSWORD` configured |
 | `503 pi is not configured` | run `docker compose exec pigeon pi` → `/login` (creates `auth.json`), then `curl localhost:8080/health` |
 | Bot never answers | bot not added to the conversation (`occ talk:bot:setup <bot-id> <token>`), or Nextcloud cannot reach `:8080/webhook/<bot>`; `docker compose logs -f` (raise `LOG_LEVEL=DEBUG`) |
 | `room name lookup failed` warnings | `NEXTCLOUD_BOT_TOKEN` invalid for API calls. Folders fall back to `room-<id>` |

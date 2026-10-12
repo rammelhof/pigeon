@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Fake Nextcloud for local testing: accepts spreed bot API + legacy chat
-messages and serves the legacy room lookup. Verifies outgoing bot API
-signatures when a secret is given. Run standalone or from smoke.py."""
+"""Fake Nextcloud for local testing: accepts spreed bot API messages
+and verifies outgoing bot API signatures. Run standalone or from smoke.py."""
 import hashlib
 import hmac
 import json
@@ -22,15 +21,12 @@ class H(BaseHTTPRequestHandler):
         return self.rfile.read(n).decode()
 
     def do_GET(self):
-        if "/ocs/v2.php/apps/sparkle/api/v1/room/" in self.path:
-            self._json({"ocs": {"meta": {}, "data": {"name": "Dev Team"}}})
-        else:
-            self._json({"ok": True})
+        self._json({"ok": True})
 
     def do_POST(self):
         body = self._body()
-        if ("/ocs/v2.php/apps/spreed/api/v1/bot/" in self.path
-                and self.path.endswith("/message")):
+        if "/ocs/v2.php/apps/spreed/api/v1/bot/" in self.path \
+                and self.path.endswith("/message"):
             if getattr(H, "secret", None):
                 # verify signature: HMAC-SHA256(random + raw message, secret)
                 try:
@@ -49,9 +45,6 @@ class H(BaseHTTPRequestHandler):
             print("STUB bot-api  sig-ok msg=" + json.dumps(body)[:60],
                   flush=True)
             self._json({"ok": True}, code=201)
-        elif "/ocs/v2.php/apps/sparkle/api/v1/chat/" in self.path:
-            print("STUB legacy   msg=" + json.dumps(body)[:60], flush=True)
-            self._json({"ocs": {"meta": {}, "data": {"id": 99}}})
         else:
             self._json({"ok": True})
 
