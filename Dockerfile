@@ -12,7 +12,9 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# PEP 668: Debian python is externally managed -> use a venv
+RUN python3 -m venv /app/.venv \
+    && /app/.venv/bin/pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 
 # default paths (overridable via env / compose)
@@ -21,4 +23,4 @@ ENV BOTS_DIR=/bots \
 RUN mkdir -p /bots /pi-home
 
 EXPOSE 8080
-CMD ["python3", "app.py"]
+CMD ["/app/.venv/bin/python", "app.py"]
