@@ -138,7 +138,8 @@ All in `.env` (compose reads it automatically):
 | Group | Variable | Notes |
 |---|---|---|
 | Nextcloud | `NEXTCLOUD_URL` | e.g. `https://cloud.example.com` |
-| Nextcloud | `NEXTCLOUD_BOT_TOKEN` | **one token**: verified in every webhook payload and used as bearer token for all Talk API calls. Must equal the token given to `occ talk:bot:install` |
+| Nextcloud | `TALK_BOT_SECRET` | Secret from `occ talk:bot:install <name> <secret> <url>` (40-128 chars). Pigeon verifies the HMAC signature of every incoming webhook with it and signs its own calls to the Talk bot API with it |
+| Nextcloud | `BOT_USER`, `BOT_APP_PASSWORD` | optional, only for the legacy classic-bot payload (old Nextcloud / old bot format) |
 | logging | `LOG_LEVEL` | `DEBUG` / `INFO` (default) / `WARNING` / `ERROR` — output goes to stdout, read with `docker compose logs -f` |
 | behaviour | `PI_TIMEOUT` | heartbeat kills a pi run after this many seconds |
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
@@ -154,9 +155,10 @@ All in `.env` (compose reads it automatically):
   path — is what you pass to `occ talk:bot:install`). If Nextcloud and this
   container share a Docker network, you can use the container name/DNS
   instead of the public URL.
-* The webhook body contains `NEXTCLOUD_BOT_TOKEN` on every call (Nextcloud
-  design) — still, do not expose the endpoint to untrusted networks without
-  TLS in front.
+* Every webhook is HMAC-signed by Nextcloud (headers
+  `X-Nextcloud-Talk-Random` / `X-Nextcloud-Talk-Signature`), so the body
+  itself does not contain the secret — still, keep the endpoint behind TLS
+  on untrusted networks.
 
 ## 7. Heartbeat & task monitoring
 
@@ -175,25 +177,29 @@ All in `.env` (compose reads it automatically):
 ## 8. Multiple bots
 
 Register several Nextcloud bots pointing at different paths of the same
-container:
+container. Pigeon verifies with a single `TALK_BOT_SECRET`, so use the
+same secret for all bots registered on it:
 
 ```bash
-./occ talk:bot:install pi1 https://YOUR-SERVER:8080/webhook/bot1 <token>  "team bot" --respond-to-all-messages
-./occ talk:bot:install pi2 https://YOUR-SERVER:8080/webhook/bot2 <token>  "support bot" --respond-to-all-messages
+./occ talk:bot:install pi1 <secret> https://ai.lan:8080/webhook/bot1 "team bot"
+./occ talk:bot:setup <bot1-id> <conversation-token-1>
+./occ talk:bot:install pi2 <secret> https://ai.lan:8080/webhook/bot2 "support bot"
+./occ talk:bot:setup <bot2-id> <conversation-token-2>
 ```
 
 They share the one pi config (model, credentials) but get fully separate
 room folders and sessions under `bots/bot1/rooms/` and `bots/bot2/rooms/`.
-If you need different models per bot, run one pigeon container per bot with
-its own `pi-home` volume.
+If you need different models or secrets per bot, run one pigeon container
+per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
 
 ## 9. Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| `403 bad token` in logs | `NEXTCLOUD_BOT_TOKEN` in `.env` ≠ token in `occ talk:bot:install` |
+| `403 bad signature` in logs | `TALK_BOT_SECRET` in `.env` ≠ secret in `occ talk:bot:install` |
+| `403 bad token` in logs | legacy payload without `BOT_USER`/`BOT_APP_PASSWORD` configured |
 | `503 pi is not configured` | run `docker compose exec pigeon pi` → `/login` (creates `auth.json`), then `curl localhost:8080/health` |
-| Bot never answers | `--respond-to-all-messages` missing, or Nextcloud cannot reach `:8080/webhook/<bot>`; `docker compose logs -f` (raise `LOG_LEVEL=DEBUG`) |
+| Bot never answers | bot not added to the conversation (`occ talk:bot:setup <bot-id> <token>`), or Nextcloud cannot reach `:8080/webhook/<bot>`; `docker compose logs -f` (raise `LOG_LEVEL=DEBUG`) |
 | `room name lookup failed` warnings | `NEXTCLOUD_BOT_TOKEN` invalid for API calls. Folders fall back to `room-<id>` |
 | `pi run failed: …` in chat | pi run crashed (see `docker compose logs -f`); check model/provider in the pi config files |
 | Answers always time out | raise `PI_TIMEOUT`, or check provider reachability from the container |

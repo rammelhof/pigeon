@@ -14,6 +14,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 ## How it works (KISS)
 
 * `POST /webhook/<bot>` receives Talk bot messages (e.g. `/webhook/bot1`).
+  Nextcloud (>= 34) signs every webhook with
+  `X-Nextcloud-Talk-Random`/`X-Nextcloud-Talk-Signature`
+  (HMAC-SHA256 over `random + raw body`, key = bot secret); pigeon
+  verifies it. The W3C-style payload already contains the room name and
+  room token, so no extra API calls are needed. (The legacy classic-bot
+  payload `{token, room_id, message}` still works as a fallback if
+  `BOT_USER`/`BOT_APP_PASSWORD` are set.)
   Each message is put in a per-room queue; **one worker thread per room**
   runs pi, so sessions are never interleaved.
 * Every Talk room gets its own folder under `bots/<bot>/rooms/`, named
@@ -22,7 +29,9 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   room for free.
 * pi is invoked as `pi --mode json "<message>"`. The JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
-  are posted back into the conversation via the Talk API.
+  are posted back into the conversation via the official Talk bot API
+  (`POST /apps/sparkle/api/v1/bot/<roomToken>/message`, signed with the
+  same secret).
 * A **heartbeat thread** runs every `HEARTBEAT_INTERVAL` seconds and checks
   all started tasks:
   * pi process still alive past `PI_TIMEOUT` → killed; the worker restarts
@@ -40,19 +49,22 @@ docker compose up -d --build
 docker compose logs -f pigeon
 ```
 
-Then register the bot on your **Nextcloud server** (admin, as the `www-data`
-user). Bots can only be added via the command line — the URL path
-(`bot1`) becomes the bot's folder name:
+Then register the bot on your **Nextcloud server** (>= 34; admin, as the
+`www-data` user). Bots can only be added via the command line — the URL
+path (`assibot`) becomes the bot's folder name, the **secret** must match
+`TALK_BOT_SECRET` in `.env` (40-128 chars):
 
 ```bash
-./occ talk:bot:install pi1 https://YOUR-SERVER:8080/webhook/bot1 change-me "pi agent" \
-  --respond-to-all-messages
+./occ talk:bot:install assi <secret> https://ai.lan:8080/webhook/assibot "pi agent"
 ```
 
-* `change-me` must equal `NEXTCLOUD_BOT_TOKEN` in `.env` (pigeon uses the
-  same token for its own Talk API calls).
-* `--respond-to-all-messages` makes the bot answer every message; without
-  it the bot only reacts to commands. Check `./occ talk:bot:install --help`.
+This gives the bot the `webhook` + `response` features. Then add it to a
+conversation (bot id from `./occ talk:bot:list`, token from the
+conversation URL):
+
+```bash
+./occ talk:bot:setup <bot-id> <conversation-token>
+```
 
 Before the first message works, pi must be configured (see below).
 
@@ -107,7 +119,8 @@ All configuration is via environment variables (see `.env.example`):
 | Variable | Default | Description |
 |---|---|---|
 | `NEXTCLOUD_URL` | – | Base URL of Nextcloud (no trailing slash) |
-| `NEXTCLOUD_BOT_TOKEN` | – | Webhook token **and** Talk API bearer token (must match `occ talk:bot:install`) |
+| `TALK_BOT_SECRET` | – | Secret from `occ talk:bot:install <name> <secret> <url>` (40-128 chars); verifies webhooks and signs bot API calls |
+| `BOT_USER` / `BOT_APP_PASSWORD` | – | optional, legacy classic-bot payload fallback (user + app password) |
 | `LOG_LEVEL` | `INFO` | python logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
 | `PI_TIMEOUT` | `600` | Seconds before the heartbeat kills a pi run |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeat checks |
@@ -141,8 +154,8 @@ python test/smoke.py   # starts fake Nextcloud + fake pi, exercises the full flo
 ## Notes & limitations (on purpose)
 
 * Uses the Flask dev server — single host, that's it.
-* The bot posts results as the bot user identity; it does not reply
-  thread-style to the triggering message.
+* The bot posts results as the bot identity via the signed bot API; it does
+  not reply thread-style to the triggering message.
 * Message text is sent to pi verbatim as the prompt; there is no templating.
-* `NEXTCLOUD_BOT_TOKEN` is sent by Nextcloud in the webhook body on every
-  call — keep the webhook URL private / behind TLS.
+* Reactions and management events from Talk are ignored (message events
+  only).

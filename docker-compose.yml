@@ -8,9 +8,11 @@ services:
     environment:
       # Nextcloud
       NEXTCLOUD_URL: ${NEXTCLOUD_URL}
-      # ONE token: checked in the webhook payload AND used as bearer token
-      # for all Talk API calls. Must match `occ talk:bot:install`.
-      NEXTCLOUD_BOT_TOKEN: ${NEXTCLOUD_BOT_TOKEN}
+      # secret from `occ talk:bot:install <name> <secret> <url> ...`
+      TALK_BOT_SECRET: ${TALK_BOT_SECRET}
+      # optional: legacy classic-bot payload fallback
+      BOT_USER: ${BOT_USER:-}
+      BOT_APP_PASSWORD: ${BOT_APP_PASSWORD:-}
       # behaviour
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PI_TIMEOUT: ${PI_TIMEOUT:-600}
