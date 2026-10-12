@@ -1,0 +1,33 @@
+services:
+  pigeon:
+    build: .
+    container_name: pigeon
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Nextcloud
+      NEXTCLOUD_URL: ${NEXTCLOUD_URL}
+      # ONE token: checked in the webhook payload AND used as bearer token
+      # for all Talk API calls. Must match `occ talk:bot:install`.
+      NEXTCLOUD_BOT_TOKEN: ${NEXTCLOUD_BOT_TOKEN}
+      # behaviour
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PI_TIMEOUT: ${PI_TIMEOUT:-600}
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-30}
+      MAX_RETRIES: ${MAX_RETRIES:-1}
+      PORT: "8080"
+    volumes:
+      # one folder per bot, one sub-folder per Talk room (pi working dirs)
+      - ./bots:/bots
+      # pi default config files (auth.json, models.json, sessions, ...)
+      - pi-home:/pi-home
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  pi-home:
