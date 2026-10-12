@@ -34,6 +34,7 @@ os.environ.update({
     "PI_CODING_AGENT_DIR": PI_CFG,
     "PI_TIMEOUT": "3",
     "HEARTBEAT_INTERVAL": "1",
+    "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
     "LOG_LEVEL": "INFO",
     "PORT": "8088",
@@ -308,7 +309,7 @@ with open(os.path.join(resume_dir, ".pigeon.json"), "w") as f:
                     "room": "resu4med", "started_at": time.time(),
                     "retries": 1, "task_id": "old-1"},
     }, f)
-resumed = app.restart_requeue()
+resumed = app.requeue_stale()
 t = wait_room_done("bot4/rooms/resumed-room", min_count=2)
 mine = [x for x in tasks()["tasks"]
         if "resumed-room" in x["room_cwd"].replace("\\", "/")]
@@ -316,6 +317,19 @@ check("interrupted + pending jobs resumed after restart",
       resumed == 2 and bool(t) and t["status"] == "done", f"{resumed} {t}")
 check("old-format job without room token dropped (no bogus post)",
       len(mine) == 2, str(mine))
+
+# 11. heartbeat self-healing: a stale on-disk job (unknown task, e.g. after
+# a crash) is re-queued by the periodic state scan
+stale_dir = os.path.join(BOTS_TEST, "bot5", "rooms", "stale-room")
+os.makedirs(stale_dir)
+with open(os.path.join(stale_dir, ".pigeon.json"), "w") as f:
+    json.dump({"pending": [],
+               "running": {"message": "stale on disk", "sender": "x",
+                           "room": "stale5ro", "started_at": time.time(),
+                           "retries": 0, "task_id": "dead-999"}}, f)
+t = wait_room_done("bot5/rooms/stale-room", timeout=15)
+check("heartbeat re-queues stale disk job (crash recovery)",
+      bool(t) and t["status"] == "done", str(t))
 state = json.load(open(os.path.join(resume_dir, ".pigeon.json")))
 check("state file clean after resume",
       state.get("pending") == [] and state.get("running") is None, str(state))

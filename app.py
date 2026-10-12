@@ -70,6 +70,8 @@ PI_CONFIG_DIR = os.environ.get(
 
 PI_TIMEOUT = float(os.environ.get("PI_TIMEOUT", "600"))           # seconds
 HEARTBEAT_INTERVAL = float(os.environ.get("HEARTBEAT_INTERVAL", "30"))
+# scan state files for stale jobs every Nth heartbeat (crash self-healing)
+STATE_SCAN_EVERY = int(os.environ.get("STATE_SCAN_EVERY", "10"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
@@ -88,7 +90,9 @@ _room_queues = {}    # "<bot>/<room>" -> queue.Queue
 _room_workers = {}   # "<bot>/<room>" -> threading.Thread
 _stats = {"started_at": time.time(), "completed": 0, "failed": 0, "retries": 0}
 _heartbeat = {"last_run": None}
+_heartbeat_ticks = 0
 _task_counter = 0
+_active_jobs = set()   # job ids currently tracked in memory (queued/running)
 
 BOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -185,53 +189,11 @@ def _clear_running(cwd, task_id):
     _state_update(cwd, upd)
 
 
-def restart_requeue():
-    """At startup: re-queue interrupted (running) and pending jobs that
-    survived in the state files. Rooms always run in their stable pi
-    session (--session-id), so context survives automatically.
-    Jobs without a stored conversation token (state files written by an
-    old version) are dropped: the result could not be posted anyway.
-    Returns number re-queued."""
-    requeued = 0
-    if not os.path.isdir(BOTS_DIR):
-        return 0
-    for bot in sorted(os.listdir(BOTS_DIR)):
-        rooms_dir = os.path.join(BOTS_DIR, bot, "rooms")
-        if not os.path.isdir(rooms_dir):
-            continue
-        for folder in sorted(os.listdir(rooms_dir)):
-            cwd = os.path.join(rooms_dir, folder)
-            if not os.path.isdir(cwd):
-                continue
-            state = _state_read(cwd)
-            entries = []
-            running = state.get("running")
-            if running:
-                entries.append(running)
-            entries.extend(state["pending"])
-            if not entries:
-                continue
-            _state_update(cwd, lambda s: s.update(pending=[], running=None))
-            for item in entries:
-                message = (item.get("message") or "").strip()
-                room = item.get("room")
-                if not message:
-                    continue
-                if not room:
-                    log.error("%s/%s: dropping job %r — no conversation token "
-                              "in state file (written by an old pigeon "
-                              "version); result could not be posted",
-                              bot, folder, message[:50])
-                    continue
-                key = f"{bot}/{folder}"
-                enqueue(key, bot, {
-                    "room": room, "room_id": folder, "message": message,
-                    "sender": item.get("sender") or "user", "cwd": cwd,
-                })
-                requeued += 1
-                log.info("re-queued %s/%s: %r (room=%s)", bot, folder,
-                         message[:50], room)
-    return requeued
+def id_counter():
+    global _task_counter
+    with _lock:
+        _task_counter += 1
+        return _task_counter
 
 
 # ------------------------------------------------------------- pi run ----
@@ -302,6 +264,65 @@ def run_pi_once(task):
     return extract_answer_and_thinking(task)
 
 
+def requeue_stale():
+    """Scan the state files and re-queue entries that are NOT tracked in
+    memory anymore (at startup: memory is empty, so every valid entry is
+    stale; in a heartbeat: only leftovers of a crash). Live entries are
+    recognised by job_id (pending) and task_id (running) and left alone.
+    Entries without a conversation token (old versions) are dropped.
+    Returns number re-queued."""
+    requeued = 0
+    if not os.path.isdir(BOTS_DIR):
+        return 0
+    with _lock:
+        active = set(_active_jobs)
+        known_tasks = set(_tasks)
+    for bot in sorted(os.listdir(BOTS_DIR)):
+        rooms_dir = os.path.join(BOTS_DIR, bot, "rooms")
+        if not os.path.isdir(rooms_dir):
+            continue
+        for folder in sorted(os.listdir(rooms_dir)):
+            cwd = os.path.join(rooms_dir, folder)
+            if not os.path.isdir(cwd):
+                continue
+            state = _state_read(cwd)
+            stale_pending = [it for it in state["pending"]
+                             if it.get("job_id") not in active]
+            running = state.get("running")
+            stale_running = bool(running) and \
+                running.get("task_id") not in known_tasks
+            if not stale_pending and not stale_running:
+                continue
+
+            def upd(s):
+                s["pending"] = [it for it in s["pending"]
+                                if it.get("job_id") in active]
+                if stale_running:
+                    s["running"] = None
+            _state_update(cwd, upd)
+            entries = ([running] if stale_running else []) + stale_pending
+            for item in entries:
+                message = (item.get("message") or "").strip()
+                room = item.get("room")
+                if not message:
+                    continue
+                if not room:
+                    log.error("%s/%s: dropping job %r — no conversation "
+                              "token in state file (written by an old "
+                              "pigeon version); result could not be posted",
+                              bot, folder, message[:50])
+                    continue
+                key = f"{bot}/{folder}"
+                enqueue(key, bot, {
+                    "room": room, "room_id": folder, "message": message,
+                    "sender": item.get("sender") or "user", "cwd": cwd,
+                })
+                requeued += 1
+                log.warning("re-queued stale job %s/%s: %r (room=%s)",
+                            bot, folder, message[:50], room)
+    return requeued
+
+
 def id_counter():
     global _task_counter
     with _lock:
@@ -322,6 +343,7 @@ def run_job(key, bot, job):
         "sender": job["sender"],
         "status": "running",
         "retries": 0,
+        "job_id": job["job_id"],
         "session_id": f"{bot}_{os.path.basename(job['cwd'])}",
         "created_at": time.time(),
         "started_at": time.time(),
@@ -375,6 +397,8 @@ def run_job(key, bot, job):
     finally:
         _clear_running(job["cwd"], task["id"])
         with _lock:
+            _active_jobs.discard(task["job_id"])
+        with _lock:
             if task["status"] == "done":
                 _stats["completed"] += 1
             else:
@@ -388,8 +412,13 @@ def _room_worker(key, bot, q):
         if job is None:
             return
         try:
-            _state_update(job["cwd"],
-                          lambda s: s["pending"].pop(0) if s["pending"] else None)
+            jid = job["job_id"]
+
+            def pop_job(s):
+                s["pending"] = [it for it in s["pending"]
+                                if it.get("job_id") != jid]
+
+            _state_update(job["cwd"], pop_job)
             run_job(key, bot, job)
         except Exception as e:  # safety net, run_job already posts
             log.error("worker for %s crashed: %s", key, e)
@@ -399,13 +428,16 @@ def _room_worker(key, bot, q):
 
 def enqueue(key, bot, job):
     """Persist the job to the room state file, then hand it to the queue."""
-    item = {"message": job["message"], "sender": job.get("sender", "user"),
+    job["job_id"] = id_counter()
+    item = {"job_id": job["job_id"], "message": job["message"],
+            "sender": job.get("sender", "user"),
             "room": job["room"], "at": time.time()}
 
     def upd(state):
         state["pending"].append(item)
     _state_update(job["cwd"], upd)
     with _lock:
+        _active_jobs.add(job["job_id"])
         q = _room_queues.get(key)
         if q is None:
             q = queue.Queue()
@@ -425,6 +457,8 @@ def _heartbeat_loop():
       worker thread then unblocks and reruns in the same room session or fails.
     * running task + no process stuck past timeout -> mark failed
       (e.g. hang while posting results).
+    Every STATE_SCAN_EVERYth tick also scans the state files and re-queues
+    jobs that are on disk but no longer tracked in memory (crash recovery).
     Retries are counted by the worker only, so MAX_RETRIES semantics stay
     consistent."""
     while True:
@@ -449,6 +483,15 @@ def _heartbeat_loop():
                     task["status"] = "failed"
                     task["error"] = task["error"] or "stuck after pi run"
         _heartbeat["last_run"] = now
+        global _heartbeat_ticks
+        _heartbeat_ticks += 1
+        if _heartbeat_ticks % STATE_SCAN_EVERY == 0:
+            try:
+                requeued = requeue_stale()
+                if requeued:
+                    log.warning("state scan re-queued %d stale job(s)", requeued)
+            except Exception as e:
+                log.warning("state scan failed: %s", e)
         time.sleep(HEARTBEAT_INTERVAL)
 
 
@@ -602,7 +645,7 @@ def startup():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
     os.makedirs(BOTS_DIR, exist_ok=True)
-    resumed = restart_requeue()
+    resumed = requeue_stale()
     if resumed:
         log.info("resumed %d job(s) from before the restart", resumed)
     t = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")

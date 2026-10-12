@@ -143,6 +143,7 @@ All in `.env` (compose reads it automatically):
 | logging | `LOG_LEVEL` | `DEBUG` / `INFO` (default) / `WARNING` / `ERROR` — output goes to stdout, read with `docker compose logs -f` |
 | behaviour | `PI_TIMEOUT` | heartbeat kills a pi run after this many seconds |
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
+| behaviour | `STATE_SCAN_EVERY` | every Nth heartbeat also scans the `.pigeon.json` files and re-queues jobs that are on disk but no longer tracked in memory (crash self-healing; default 10 → every ~5 min) |
 | behaviour | `MAX_RETRIES` | how often a failed/timed-out task is rerun in the same room session |
 | behaviour | `PORT` | HTTP port (published as `8080:8080`) |
 
@@ -169,6 +170,12 @@ All in `.env` (compose reads it automatically):
     up to `MAX_RETRIES` times, then posts a failure notice to the room.
   * **running + no process + age > `PI_TIMEOUT`+30s** → stuck (e.g. while
     posting results) → marked `failed`.
+* **State scan**: every `STATE_SCAN_EVERY`th tick the heartbeat also scans
+  all `.pigeon.json` files and re-queues entries that are on disk but no
+  longer tracked in memory — jobs left over from a crash are picked up
+  without a restart. Live entries (pending `job_id` / running `task_id`
+  still in memory) are left alone. Entries without a room token (old
+  versions) are dropped, since their result could not be posted.
 * `GET /health` shows the last heartbeat timestamp, pi configuration status,
   counters (`completed`/`failed`/`retries`) and every task with its status,
   age and whether its pi process is alive. Returns `503` when pi is not
@@ -196,7 +203,9 @@ per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
 
 * **Restart** (`docker compose restart pigeon`): safe. Queued (pending) and
   interrupted (running) tasks are stored in `<room>/.pigeon.json` and are
-  re-queued automatically at startup. Every room always runs in its
+  re-queued automatically at startup — and the periodic state scan picks
+  up jobs left on disk after a crash even without a restart. Every room
+  always runs in its
   stable pi session (`--session-id <room folder>`), and pi's session state
   lives in the room folders
   (`/bots`) and the `pi-home` volume, both of which survive a restart.
