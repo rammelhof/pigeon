@@ -277,6 +277,8 @@ except Exception:
 check("pending message persisted in state file",
       any(p.get("message") == "follow-up please"
           for p in state.get("pending", [])), str(state))
+check("running entry stores the room token (needed for resume)",
+      (state.get("running") or {}).get("room") == "h4ngtok1", str(state))
 t = wait_room_done("bot2/rooms/hang-room", min_count=2, timeout=30)
 check("hang killed by heartbeat, continued, follow-up processed",
       bool(t) and t["status"] == "done", str(t))

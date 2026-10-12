@@ -170,6 +170,7 @@ def _mark_running(cwd, task):
         state["running"] = {
             "message": task["message"],
             "sender": task["sender"],
+            "room": task["room"],
             "started_at": task["started_at"],
             "retries": task["retries"],
             "task_id": task["id"],
@@ -315,6 +316,7 @@ def run_job(key, bot, job):
         "id": f"{int(time.time())}-{job['room_id']}-{id_counter()}",
         "bot": bot,
         "room_id": job["room_id"],
+        "room": job["room"],
         "cwd": job["cwd"],
         "message": job["message"],
         "sender": job["sender"],

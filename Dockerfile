@@ -28,10 +28,4 @@ RUN mkdir -p /bots /pi-home
 
 EXPOSE 8080
 # production WSGI server; single worker (in-process state), threaded
-CMD ["/app/.venv/bin/gunicorn",
-     "--bind", "0.0.0.0:8080",
-     "--workers", "1",
-     "--threads", "32",
-     "--access-logfile", "-",
-     "--error-logfile", "-",
-     "wsgi:app"]
+CMD ["/app/.venv/bin/gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "32", "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]
