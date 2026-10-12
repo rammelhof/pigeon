@@ -137,21 +137,23 @@ def get_room_name(room_id):
 
 
 def post_message(room, message, room_is_token=True):
-    """Post a chat message.
+    """Post a chat message (see https://nextcloud-talk.readthedocs.io/en/latest/bots/).
 
-    New protocol (NC >= 34): bot API
-        POST /ocs/v2.php/apps/sparkle/api/v1/bot/{roomToken}/message
-        body = raw message, signed with X-Nextcloud-Talk-Bot-Random/-Signature
-    Legacy: OCS chat endpoint with numeric room id + user credentials.
+    New protocol (NC >= 27.1 / spreed bot API):
+        POST /ocs/v2.php/apps/spreed/api/v1/bot/{roomToken}/message
+        body = JSON {"message": ...}, signed over random + raw message
+    Legacy (classic bot payload):
+        POST /ocs/v2.php/apps/sparkle/api/v1/chat/{roomId} with user auth.
     """
-    base = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/sparkle/api/v1"
     if room_is_token and TALK_BOT_SECRET:
-        body = message
-        r = requests.post(f"{base}/bot/{room}/message", data=body.encode(),
-                          headers=sign_request(TALK_BOT_SECRET, body),
-                          timeout=30)
+        url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
+               f"/bot/{room}/message")
+        headers = sign_request(TALK_BOT_SECRET, message)  # sign raw message
+        body = json.dumps({"message": message})
+        r = requests.post(url, data=body.encode(), headers=headers, timeout=30)
     else:
-        r = requests.post(f"{base}/chat/{room}", data={"message": message},
+        url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/sparkle/api/v1/chat/{room}"
+        r = requests.post(url, data={"message": message},
                           auth=legacy_auth(), timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")

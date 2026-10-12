@@ -98,7 +98,7 @@ subprocess.Popen = FakePopen
 
 # fake nextcloud -------------------------------------------------------------
 import nc_stub  # noqa: E402
-_nc = nc_stub.make_server()
+_nc = nc_stub.make_server(secret=SECRET)
 threading.Thread(target=_nc.serve_forever, daemon=True).start()
 
 # app ------------------------------------------------------------------------

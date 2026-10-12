@@ -30,8 +30,9 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * pi is invoked as `pi --mode json "<message>"`. The JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
   are posted back into the conversation via the official Talk bot API
-  (`POST /apps/sparkle/api/v1/bot/<roomToken>/message`, signed with the
-  same secret).
+  (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
+  `OCS-APIRequest: true`, signed with the same secret — see the
+  [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
 * A **heartbeat thread** runs every `HEARTBEAT_INTERVAL` seconds and checks
   all started tasks:
   * pi process still alive past `PI_TIMEOUT` → killed; the worker restarts
