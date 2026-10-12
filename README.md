@@ -24,10 +24,10 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * Every Talk room gets its own folder under `bots/<bot>/rooms/`, named
   after the room (sanitised). pi runs with that folder as working
   directory **and always in the room's stable pi session**
-  (`pi --session-id <room folder>` — created on first use), so the bot
+  (`pi --session-id <bot>_<room folder>` — created on first use), so the bot
   keeps the full conversation context of each room, across messages and
   restarts.
-* pi is invoked as `pi --mode json --session-id <room> "<message>"`. The
+* pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
   are posted back into the conversation via the official Talk bot API

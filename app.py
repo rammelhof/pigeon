@@ -312,7 +312,7 @@ def run_job(key, bot, job):
         "sender": job["sender"],
         "status": "running",
         "retries": 0,
-        "session_id": os.path.basename(job["cwd"]),
+        "session_id": f"{bot}_{os.path.basename(job['cwd'])}",
         "created_at": time.time(),
         "started_at": time.time(),
         "proc": None,
