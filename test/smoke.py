@@ -58,16 +58,22 @@ GOOD = [
 
 
 class FakePopen:
+    _seen = set()  # (cwd, prompt) already attempted
+
     def __init__(self, cmd, **kw):
         self.cmd = cmd
         self.returncode = 0
         self.killed = False
         prompt = cmd[-1]
-        if "make-fail" in prompt and "--continue" not in cmd:
+        cwd = kw.get("cwd", "")
+        key = (cwd, prompt)
+        first_attempt = key not in self._seen
+        self._seen.add(key)
+        if "make-fail" in prompt and first_attempt:
             self.returncode = 1
             self.stdout = iter([])
             self.stderr = io.StringIO("boom: provider error")
-        elif "hang" in prompt and "--continue" not in cmd:
+        elif "hang" in prompt and first_attempt:
             self.stdout = self._hang()
             self.stderr = io.StringIO("")
         else:

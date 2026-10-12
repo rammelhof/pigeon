@@ -143,7 +143,7 @@ All in `.env` (compose reads it automatically):
 | logging | `LOG_LEVEL` | `DEBUG` / `INFO` (default) / `WARNING` / `ERROR` — output goes to stdout, read with `docker compose logs -f` |
 | behaviour | `PI_TIMEOUT` | heartbeat kills a pi run after this many seconds |
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
-| behaviour | `MAX_RETRIES` | how often a failed/timed-out task is restarted with `pi --continue` |
+| behaviour | `MAX_RETRIES` | how often a failed/timed-out task is rerun in the same room session |
 | behaviour | `PORT` | HTTP port (published as `8080:8080`) |
 
 ## 6. Networking
@@ -165,7 +165,7 @@ All in `.env` (compose reads it automatically):
 * A background thread wakes every `HEARTBEAT_INTERVAL` seconds.
 * For every started task it checks:
   * **running + process alive + age > `PI_TIMEOUT`** → kill the process; the
-    worker restarts the task with `pi --continue` (continues the pi session)
+    worker reruns the task in the same room session (same `--session-id`)
     up to `MAX_RETRIES` times, then posts a failure notice to the room.
   * **running + no process + age > `PI_TIMEOUT`+30s** → stuck (e.g. while
     posting results) → marked `failed`.
@@ -196,8 +196,9 @@ per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
 
 * **Restart** (`docker compose restart pigeon`): safe. Queued (pending) and
   interrupted (running) tasks are stored in `<room>/.pigeon.json` and are
-  re-queued automatically at startup; interrupted runs continue the pi
-  session (`pi --continue`). pi's session state lives in the room folders
+  re-queued automatically at startup. Every room always runs in its
+  stable pi session (`--session-id <room folder>`), and pi's session state
+  lives in the room folders
   (`/bots`) and the `pi-home` volume, both of which survive a restart.
 * **Stop** (`docker stop pigeon`): fast. On SIGTERM pigeon kills active pi
   runs and exits, so the container stops in well under a second. If the

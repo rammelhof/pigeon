@@ -24,11 +24,13 @@ Behaviour:
   * Pi must be configured with its default config files (auth.json /
     models.json in PI_CODING_AGENT_DIR). When not configured, the webhook
     answers 503 and /health reports the error.
-  * Pi is invoked with `--mode json`. The assistant's thinking and answer
-    are extracted from the JSONL event stream and posted back to the chat.
+  * Pi is invoked with `--mode json --session-id <room folder>`: every
+    room always uses the same stable pi session (created on first use),
+    so the bot keeps full conversation context per room across messages
+    and restarts.
   * A background heartbeat task checks all started tasks: it kills runs
-    that exceed PI_TIMEOUT and flags stuck tasks. Failed runs are retried
-    (pi --continue) up to MAX_RETRIES times.
+    that exceed PI_TIMEOUT and flags stuck tasks. Failed runs are rerun
+    in the same room session up to MAX_RETRIES times.
   * SIGTERM/SIGINT kills active pi runs and exits immediately, so
     `docker stop` is fast (no orphaned node processes keeping the
     container alive until the grace-period SIGKILL).
@@ -184,8 +186,9 @@ def _clear_running(cwd, task_id):
 
 def restart_requeue():
     """At startup: re-queue interrupted (running) and pending jobs that
-    survived in the state files. Interrupted jobs resume the pi session
-    (use_continue), pending ones run normally. Returns number re-queued."""
+    survived in the state files. Rooms always run in their stable pi
+    session (--session-id), so context survives automatically.
+    Returns number re-queued."""
     requeued = 0
     if not os.path.isdir(BOTS_DIR):
         return 0
@@ -202,24 +205,23 @@ def restart_requeue():
             running = state.get("running")
             if running:
                 jobs.append((running.get("message"), running.get("sender") or "user",
-                             running.get("room") or folder, True))
+                             running.get("room") or folder))
             for item in state["pending"]:
                 jobs.append((item.get("message"), item.get("sender") or "user",
-                             item.get("room") or folder, False))
+                             item.get("room") or folder))
             if not jobs:
                 continue
             _state_update(cwd, lambda s: s.update(pending=[], running=None))
-            for message, sender, room, use_continue in jobs:
+            for message, sender, room in jobs:
                 if not message:
                     continue
                 key = f"{bot}/{folder}"
                 enqueue(key, bot, {
                     "room": room, "room_id": folder, "message": message,
-                    "sender": sender, "cwd": cwd, "use_continue": use_continue,
+                    "sender": sender, "cwd": cwd,
                 })
                 requeued += 1
-                log.info("re-queued %s/%s: %r (continue=%s)", bot, folder,
-                         message[:50], use_continue)
+                log.info("re-queued %s/%s: %r", bot, folder, message[:50])
     return requeued
 
 
@@ -235,12 +237,10 @@ def pi_config_status():
     return False, PI_CONFIG_DIR
 
 
-def pi_command(prompt, continue_session):
-    cmd = [PI_BIN, "--mode", "json"]
-    if continue_session:
-        cmd += ["--continue"]
-    cmd.append(prompt)
-    return cmd
+def pi_command(prompt, session_id):
+    """Always run in the room's stable pi session: --session-id opens it
+    or creates it (first message of a new room)."""
+    return [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
 
 
 def extract_answer_and_thinking(task):
@@ -259,8 +259,7 @@ def extract_answer_and_thinking(task):
 
 def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
-    continue_session = task["retries"] > 0 or task.get("use_continue")
-    cmd = pi_command(task["message"], continue_session=continue_session)
+    cmd = pi_command(task["message"], task["session_id"])
     log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
     proc = subprocess.Popen(cmd, cwd=task["cwd"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -313,7 +312,7 @@ def run_job(key, bot, job):
         "sender": job["sender"],
         "status": "running",
         "retries": 0,
-        "use_continue": bool(job.get("use_continue")),
+        "session_id": os.path.basename(job["cwd"]),
         "created_at": time.time(),
         "started_at": time.time(),
         "proc": None,
@@ -413,7 +412,7 @@ def enqueue(key, bot, job):
 def _heartbeat_loop():
     """Check all started tasks:
     * running task + live process past PI_TIMEOUT  -> kill process; the
-      worker thread then unblocks and retries (pi --continue) or fails.
+      worker thread then unblocks and reruns in the same room session or fails.
     * running task + no process stuck past timeout -> mark failed
       (e.g. hang while posting results).
     Retries are counted by the worker only, so MAX_RETRIES semantics stay

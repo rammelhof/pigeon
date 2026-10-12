@@ -23,9 +23,12 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   runs pi, so sessions are never interleaved.
 * Every Talk room gets its own folder under `bots/<bot>/rooms/`, named
   after the room (sanitised). pi runs with that folder as working
-  directory — pi's per-directory sessions give you conversation memory per
-  room for free.
-* pi is invoked as `pi --mode json "<message>"`. The JSONL event stream is
+  directory **and always in the room's stable pi session**
+  (`pi --session-id <room folder>` — created on first use), so the bot
+  keeps the full conversation context of each room, across messages and
+  restarts.
+* pi is invoked as `pi --mode json --session-id <room> "<message>"`. The
+  JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
   are posted back into the conversation via the official Talk bot API
   (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
@@ -33,13 +36,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
 * A **heartbeat thread** runs every `HEARTBEAT_INTERVAL` seconds and checks
   all started tasks:
-  * pi process still alive past `PI_TIMEOUT` → killed; the worker restarts
-    the task with `pi --continue` (up to `MAX_RETRIES`),
+  * pi process still alive past `PI_TIMEOUT` → killed; the worker reruns
+    the task in the same room session (up to `MAX_RETRIES`),
   * task stuck without a process past the timeout → marked failed.
 * **Restart-safe queueing**: every queued message and the running task are
   persisted in `<room dir>/.pigeon.json`. On container (re)start pigeon
-  re-queues them — interrupted runs resume the pi session (`--continue`),
-  so no message is lost in a restart.
+  re-queues them, so no message is lost in a restart — and since every
+  room always runs in its stable pi session, context survives too.
 * **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
   runs and exits immediately — the container does not linger until the
   grace-period SIGKILL.
@@ -132,7 +135,7 @@ All configuration is via environment variables (see `.env.example`):
 | `LOG_LEVEL` | `INFO` | python logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) |
 | `PI_TIMEOUT` | `600` | Seconds before the heartbeat kills a pi run |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeat checks |
-| `MAX_RETRIES` | `1` | Task restarts (with `pi --continue`) after a failed run |
+| `MAX_RETRIES` | `1` | Reruns a failed/timed-out task in the same room session |
 | `BOTS_DIR` | `/bots` | Where per-bot room folders live |
 | `PI_CODING_AGENT_DIR` | `/pi-home/agent` | pi config dir (auth.json, models.json, sessions) |
 | `PORT` | `8080` | HTTP port |
