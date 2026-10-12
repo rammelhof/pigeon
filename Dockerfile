@@ -11,6 +11,10 @@ RUN apt-get update \
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 WORKDIR /app
+# bake the git commit into the image (compose passes it as build arg,
+# see docker-compose.yml / README)
+ARG GIT_COMMIT=unknown
+ENV PIGEON_COMMIT=$GIT_COMMIT
 COPY requirements.txt .
 # PEP 668: Debian python is externally managed -> use a venv
 RUN python3 -m venv /app/.venv \

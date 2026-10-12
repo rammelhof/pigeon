@@ -51,6 +51,9 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 
 ```bash
 cp .env.example .env      # fill in the values
+# optional: stamp the git commit hash into the image (build info shown
+# on /, /health and in the start log)
+echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> .env
 docker compose up -d --build
 docker compose logs -f pigeon
 ```

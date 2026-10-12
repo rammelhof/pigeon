@@ -1,6 +1,10 @@
 services:
   pigeon:
-    build: .
+    build:
+      context: .
+      args:
+        # stamped into the image, shown on /, /health and the start log
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     container_name: pigeon
     restart: unless-stopped
     ports:

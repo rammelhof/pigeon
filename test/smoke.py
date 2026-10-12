@@ -214,6 +214,11 @@ check("health 200 after config", s == 200, str(s))
 check("health shape", h.get("status") == "ok"
       and h.get("pi", {}).get("configured") is True
       and "heartbeat" in h and "tasks" in h)
+check("health reports version + commit",
+      h.get("version") == "1.0.0" and "commit" in h, str(h.get("version")))
+s, idx = get("/")
+check("index reports version + commit",
+      idx.get("version") == "1.0.0" and "commit" in idx, str(idx))
 
 # 2. bad signature
 s, body = signed_webhook("bot1", new_payload("hi"), secret="y" * 64)

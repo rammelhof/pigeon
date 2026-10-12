@@ -52,6 +52,10 @@ from flask import Flask, jsonify, request
 # ---------------------------------------------------------------- config --
 
 NEXTCLOUD_URL = os.environ.get("NEXTCLOUD_URL", "").rstrip("/")
+
+# build/version info (PIGEON_COMMIT is set by the Dockerfile build arg)
+VERSION = "1.0.0"
+COMMIT = os.environ.get("PIGEON_COMMIT", "unknown")
 # Secret given to `occ talk:bot:install <name> <secret> <url> ...`
 # (40-128 chars). Verifies incoming webhooks and signs outgoing API calls.
 TALK_BOT_SECRET = os.environ.get("TALK_BOT_SECRET", "")
@@ -443,7 +447,8 @@ def _heartbeat_loop():
 
 @app.get("/")
 def index():
-    return jsonify({"service": "pigeon",
+    return jsonify({"service": "pigeon", "version": VERSION,
+                    "commit": COMMIT,
                     "endpoints": ["/webhook/<bot>", "/health"]})
 
 
@@ -473,6 +478,8 @@ def health():
     ok = pi_ok and stats_ok
     return jsonify({
         "status": "ok" if ok else "degraded",
+        "version": VERSION,
+        "commit": COMMIT,
         "pi": {"configured": pi_ok, "config_file": pi_config_file},
         "heartbeat": hb,
         "stats": stats,
@@ -581,6 +588,6 @@ if __name__ == "__main__":
     t = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
     t.start()
     port = int(os.environ.get("PORT", "8080"))
-    log.info("listening on :%d, bots in %s, pi config in %s",
-             port, BOTS_DIR, PI_CONFIG_DIR)
+    log.info("pigeon %s (%s) listening on :%d, bots in %s, pi config in %s",
+             VERSION, COMMIT, port, BOTS_DIR, PI_CONFIG_DIR)
     app.run(host="0.0.0.0", port=port)
