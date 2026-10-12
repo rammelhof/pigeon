@@ -153,7 +153,7 @@ configured via pi's default config files — see [docs/docker.md](docs/docker.md
 
 ```
 app.py            the whole server (Flask, stdlib only otherwise)
-wsgi.py           gunicorn entrypoint (post_fork -> app.startup())
+wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> app.startup())
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example

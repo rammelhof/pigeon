@@ -1,8 +1,10 @@
-"""gunicorn entrypoint (production server for pigeon).
+"""gunicorn entrypoint + config module (production server for pigeon).
 
 Run (as the Dockerfile CMD):
-    gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 32 wsgi:app
+    gunicorn -c python:wsgi --bind 0.0.0.0:8080 --workers 1 --threads 32 wsgi:app
 
+`-c python:wsgi` registers the hooks defined below (gunicorn does NOT
+look for them in the WSGI module — config module only).
 `--workers 1` matters: pigeon keeps its state (task registry, room queues,
 heartbeat) in process memory, and post_fork runs startup() exactly once
 per worker — after gunicorn's own signal setup, so pigeon's fast-shutdown
