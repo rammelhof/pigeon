@@ -298,15 +298,22 @@ os.makedirs(resume_dir)
 with open(os.path.join(resume_dir, ".pigeon.json"), "w") as f:
     json.dump({
         "pending": [{"message": "second one", "sender": "x",
-                     "room": "resu4med", "at": time.time()}],
+                     "room": "resu4med", "at": time.time()},
+                    # old-version format: no "room" token -> must be dropped
+                    {"message": "old format no room", "sender": "x",
+                     "at": time.time()}],
         "running": {"message": "interrupted one", "sender": "x",
                     "room": "resu4med", "started_at": time.time(),
                     "retries": 1, "task_id": "old-1"},
     }, f)
 resumed = app.restart_requeue()
 t = wait_room_done("bot4/rooms/resumed-room", min_count=2)
+mine = [x for x in tasks()["tasks"]
+        if "resumed-room" in x["room_cwd"].replace("\\", "/")]
 check("interrupted + pending jobs resumed after restart",
-      resumed >= 2 and bool(t) and t["status"] == "done", f"{resumed} {t}")
+      resumed == 2 and bool(t) and t["status"] == "done", f"{resumed} {t}")
+check("old-format job without room token dropped (no bogus post)",
+      len(mine) == 2, str(mine))
 state = json.load(open(os.path.join(resume_dir, ".pigeon.json")))
 check("state file clean after resume",
       state.get("pending") == [] and state.get("running") is None, str(state))

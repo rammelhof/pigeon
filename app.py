@@ -188,6 +188,8 @@ def restart_requeue():
     """At startup: re-queue interrupted (running) and pending jobs that
     survived in the state files. Rooms always run in their stable pi
     session (--session-id), so context survives automatically.
+    Jobs without a stored conversation token (state files written by an
+    old version) are dropped: the result could not be posted anyway.
     Returns number re-queued."""
     requeued = 0
     if not os.path.isdir(BOTS_DIR):
@@ -201,27 +203,33 @@ def restart_requeue():
             if not os.path.isdir(cwd):
                 continue
             state = _state_read(cwd)
-            jobs = []
+            entries = []
             running = state.get("running")
             if running:
-                jobs.append((running.get("message"), running.get("sender") or "user",
-                             running.get("room") or folder))
-            for item in state["pending"]:
-                jobs.append((item.get("message"), item.get("sender") or "user",
-                             item.get("room") or folder))
-            if not jobs:
+                entries.append(running)
+            entries.extend(state["pending"])
+            if not entries:
                 continue
             _state_update(cwd, lambda s: s.update(pending=[], running=None))
-            for message, sender, room in jobs:
+            for item in entries:
+                message = (item.get("message") or "").strip()
+                room = item.get("room")
                 if not message:
+                    continue
+                if not room:
+                    log.error("%s/%s: dropping job %r — no conversation token "
+                              "in state file (written by an old pigeon "
+                              "version); result could not be posted",
+                              bot, folder, message[:50])
                     continue
                 key = f"{bot}/{folder}"
                 enqueue(key, bot, {
                     "room": room, "room_id": folder, "message": message,
-                    "sender": sender, "cwd": cwd,
+                    "sender": item.get("sender") or "user", "cwd": cwd,
                 })
                 requeued += 1
-                log.info("re-queued %s/%s: %r", bot, folder, message[:50])
+                log.info("re-queued %s/%s: %r (room=%s)", bot, folder,
+                         message[:50], room)
     return requeued
 
 
