@@ -249,12 +249,29 @@ t = wait_room_done("bot1/rooms/assibot", min_count=2, retries=1)
 check("failed run retried and done",
       bool(t) and t["status"] == "done" and t["retries"] == 1, str(t))
 
-# 8. hanging prompt (different bot) -> heartbeat kills -> retry -> done
+# 8. hanging prompt (different bot) -> heartbeat kills -> retry -> done;
+#    a second message stays queued and is persisted in the state file
 s, _ = signed_webhook("bot2", new_payload("hang", room_token="h4ngtok1",
                                           room_name="Hang Room"))
-t = wait_room_done("bot2/rooms/hang-room", timeout=30)
-check("hang killed by heartbeat, continued",
-      bool(t) and t["status"] == "done" and t["retries"] == 1, str(t))
+s, _ = signed_webhook("bot2", new_payload("follow-up please",
+                                          room_token="h4ngtok1",
+                                          room_name="Hang Room"))
+time.sleep(0.5)
+state_file = os.path.join(BOTS_TEST, "bot2", "rooms", "hang-room",
+                          ".pigeon.json")
+try:
+    state = json.load(open(state_file))
+except Exception:
+    state = {}
+check("pending message persisted in state file",
+      any(p.get("message") == "follow-up please"
+          for p in state.get("pending", [])), str(state))
+t = wait_room_done("bot2/rooms/hang-room", min_count=2, timeout=30)
+check("hang killed by heartbeat, continued, follow-up processed",
+      bool(t) and t["status"] == "done", str(t))
+state = json.load(open(state_file))
+check("state file clean after tasks done",
+      state.get("pending") == [] and state.get("running") is None, str(state))
 check("bot2 has own rooms dir",
       os.path.isdir(os.path.join(BOTS_TEST, "bot2", "rooms", "hang-room")))
 
@@ -263,6 +280,25 @@ s, body = signed_webhook("bot3", new_payload("hi via bot3", room_token="tok3nabc
 t = wait_room_done("bot3/rooms/team-bot")
 check("bot3 gets own folder + session",
       s == 202 and bool(t) and t["status"] == "done", f"{s} {body} {t}")
+
+# 10. restart: interrupted (running) + pending jobs are re-queued and run
+resume_dir = os.path.join(BOTS_TEST, "bot4", "rooms", "resumed-room")
+os.makedirs(resume_dir)
+with open(os.path.join(resume_dir, ".pigeon.json"), "w") as f:
+    json.dump({
+        "pending": [{"message": "second one", "sender": "x",
+                     "room": "resu4med", "at": time.time()}],
+        "running": {"message": "interrupted one", "sender": "x",
+                    "room": "resu4med", "started_at": time.time(),
+                    "retries": 1, "task_id": "old-1"},
+    }, f)
+resumed = app.restart_requeue()
+t = wait_room_done("bot4/rooms/resumed-room", min_count=2)
+check("interrupted + pending jobs resumed after restart",
+      resumed >= 2 and bool(t) and t["status"] == "done", f"{resumed} {t}")
+state = json.load(open(os.path.join(resume_dir, ".pigeon.json")))
+check("state file clean after resume",
+      state.get("pending") == [] and state.get("running") is None, str(state))
 
 print()
 if failures:

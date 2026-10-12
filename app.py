@@ -15,7 +15,9 @@ Nextcloud Talk bot protocol (https://nextcloud-talk.readthedocs.io/en/latest/bot
 
 Behaviour:
   * Every incoming message is queued per bot+room (one worker thread per
-    room, so pi sessions are never interleaved).
+    room, so pi sessions are never interleaved). The queue is persisted
+    in <room dir>/.pigeon.json, so pending and interrupted (running)
+    jobs survive container restarts and are re-queued at startup.
   * Each Talk room gets its own folder under BOTS_DIR/<bot>/rooms/, named
     after the room. Pi runs with that folder as working directory, so pi's
     per-directory sessions keep per-room conversation context.
@@ -27,6 +29,9 @@ Behaviour:
   * A background heartbeat task checks all started tasks: it kills runs
     that exceed PI_TIMEOUT and flags stuck tasks. Failed runs are retried
     (pi --continue) up to MAX_RETRIES times.
+  * SIGTERM/SIGINT kills active pi runs and exits immediately, so
+    `docker stop` is fast (no orphaned node processes keeping the
+    container alive until the grace-period SIGKILL).
 """
 
 import hashlib
@@ -36,6 +41,7 @@ import logging
 import os
 import queue
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -124,6 +130,95 @@ def folder_for_room(room_id, room_name):
     return clean or f"room-{room_id}"
 
 
+# ------------------------------------------------- queue persistence ------
+
+def _state_path(cwd):
+    return os.path.join(cwd, ".pigeon.json")
+
+
+def _state_read(cwd):
+    try:
+        with open(_state_path(cwd)) as f:
+            state = json.load(f)
+    except Exception:
+        return {"pending": [], "running": None}
+    state.setdefault("pending", [])
+    state.setdefault("running", None)
+    return state
+
+
+def _state_update(cwd, fn):
+    """Load state, apply fn(state), write it back atomically."""
+    with _lock:
+        state = _state_read(cwd)
+        fn(state)
+        tmp = _state_path(cwd) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, _state_path(cwd))
+        return state
+
+
+def _mark_running(cwd, task):
+    def upd(state):
+        state["running"] = {
+            "message": task["message"],
+            "sender": task["sender"],
+            "started_at": task["started_at"],
+            "retries": task["retries"],
+            "task_id": task["id"],
+        }
+    _state_update(cwd, upd)
+
+
+def _clear_running(cwd, task_id):
+    def upd(state):
+        if state.get("running") and state["running"].get("task_id") == task_id:
+            state["running"] = None
+    _state_update(cwd, upd)
+
+
+def restart_requeue():
+    """At startup: re-queue interrupted (running) and pending jobs that
+    survived in the state files. Interrupted jobs resume the pi session
+    (use_continue), pending ones run normally. Returns number re-queued."""
+    requeued = 0
+    if not os.path.isdir(BOTS_DIR):
+        return 0
+    for bot in sorted(os.listdir(BOTS_DIR)):
+        rooms_dir = os.path.join(BOTS_DIR, bot, "rooms")
+        if not os.path.isdir(rooms_dir):
+            continue
+        for folder in sorted(os.listdir(rooms_dir)):
+            cwd = os.path.join(rooms_dir, folder)
+            if not os.path.isdir(cwd):
+                continue
+            state = _state_read(cwd)
+            jobs = []
+            running = state.get("running")
+            if running:
+                jobs.append((running.get("message"), running.get("sender") or "user",
+                             running.get("room") or folder, True))
+            for item in state["pending"]:
+                jobs.append((item.get("message"), item.get("sender") or "user",
+                             item.get("room") or folder, False))
+            if not jobs:
+                continue
+            _state_update(cwd, lambda s: s.update(pending=[], running=None))
+            for message, sender, room, use_continue in jobs:
+                if not message:
+                    continue
+                key = f"{bot}/{folder}"
+                enqueue(key, bot, {
+                    "room": room, "room_id": folder, "message": message,
+                    "sender": sender, "cwd": cwd, "use_continue": use_continue,
+                })
+                requeued += 1
+                log.info("re-queued %s/%s: %r (continue=%s)", bot, folder,
+                         message[:50], use_continue)
+    return requeued
+
+
 # ------------------------------------------------------------- pi run ----
 
 def pi_config_status():
@@ -160,11 +255,12 @@ def extract_answer_and_thinking(task):
 
 def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
-    cmd = pi_command(task["message"], continue_session=task["retries"] > 0)
+    continue_session = task["retries"] > 0 or task.get("use_continue")
+    cmd = pi_command(task["message"], continue_session=continue_session)
     log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
     proc = subprocess.Popen(cmd, cwd=task["cwd"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True)
+                            text=True, start_new_session=True)
     task["proc"] = proc
     task["started_at"] = time.time()
 
@@ -213,6 +309,7 @@ def run_job(key, bot, job):
         "sender": job["sender"],
         "status": "running",
         "retries": 0,
+        "use_continue": bool(job.get("use_continue")),
         "created_at": time.time(),
         "started_at": time.time(),
         "proc": None,
@@ -222,6 +319,7 @@ def run_job(key, bot, job):
     }
     with _lock:
         _tasks[task["id"]] = task
+    _mark_running(job["cwd"], task)
 
     try:
         while True:
@@ -234,6 +332,7 @@ def run_job(key, bot, job):
                 task["retries"] += 1
                 _stats["retries"] += 1
                 task["status"] = "retrying"
+                _mark_running(job["cwd"], task)
                 log.warning("task %s failed (%s), retry %d",
                             task["id"], e, task["retries"])
                 time.sleep(2)
@@ -261,6 +360,7 @@ def run_job(key, bot, job):
         except Exception as post_err:
             log.error("could not post failure notice: %s", post_err)
     finally:
+        _clear_running(job["cwd"], task["id"])
         with _lock:
             if task["status"] == "done":
                 _stats["completed"] += 1
@@ -275,6 +375,8 @@ def _room_worker(key, bot, q):
         if job is None:
             return
         try:
+            _state_update(job["cwd"],
+                          lambda s: s["pending"].pop(0) if s["pending"] else None)
             run_job(key, bot, job)
         except Exception as e:  # safety net, run_job already posts
             log.error("worker for %s crashed: %s", key, e)
@@ -283,6 +385,13 @@ def _room_worker(key, bot, q):
 
 
 def enqueue(key, bot, job):
+    """Persist the job to the room state file, then hand it to the queue."""
+    item = {"message": job["message"], "sender": job.get("sender", "user"),
+            "room": job["room"], "at": time.time()}
+
+    def upd(state):
+        state["pending"].append(item)
+    _state_update(job["cwd"], upd)
     with _lock:
         q = _room_queues.get(key)
         if q is None:
@@ -444,7 +553,31 @@ def webhook(bot):
 
 
 if __name__ == "__main__":
+    def _shutdown(signum, frame):
+        """Kill active pi process groups and exit so docker stop is fast."""
+        log.info("received %s, stopping active pi runs", signum)
+        with _lock:
+            procs = [t["proc"] for t in _tasks.values()
+                     if t["proc"] is not None and t["proc"].poll() is None]
+        for p in procs:
+            try:
+                if hasattr(os, "killpg"):  # Linux/Docker: kill whole group
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                else:
+                    p.kill()
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+        os._exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     os.makedirs(BOTS_DIR, exist_ok=True)
+    resumed = restart_requeue()
+    if resumed:
+        log.info("resumed %d job(s) from before the restart", resumed)
     t = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
     t.start()
     port = int(os.environ.get("PORT", "8080"))

@@ -47,11 +47,12 @@ Two volumes are mounted (see `docker-compose.yml`):
 One folder **per bot** (from the `/webhook/<bot>` URL), and inside it one
 folder **per Talk room**, created automatically on first message:
 
-```
+```text
 bots/
 ├── bot1/
 │   └── rooms/
 │       ├── dev-team/        # working directory of pi for room "Dev Team"
+│       │   └── .pigeon.json # persisted task queue (pending/running)
 │       ├── home-office/
 │       └── room-47/         # fallback name when the room has no name (1:1)
 └── bot2/
@@ -190,6 +191,18 @@ They share the one pi config (model, credentials) but get fully separate
 room folders and sessions under `bots/bot1/rooms/` and `bots/bot2/rooms/`.
 If you need different models or secrets per bot, run one pigeon container
 per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
+
+## 8.1 Restarting & stopping
+
+* **Restart** (`docker compose restart pigeon`): safe. Queued (pending) and
+  interrupted (running) tasks are stored in `<room>/.pigeon.json` and are
+  re-queued automatically at startup; interrupted runs continue the pi
+  session (`pi --continue`). pi's session state lives in the room folders
+  (`/bots`) and the `pi-home` volume, both of which survive a restart.
+* **Stop** (`docker stop pigeon`): fast. On SIGTERM pigeon kills active pi
+  runs and exits, so the container stops in well under a second. If the
+  stop takes ~10 s, you are running an old image without the shutdown
+  handler — rebuild with `docker compose up -d --build`.
 
 ## 9. Troubleshooting
 

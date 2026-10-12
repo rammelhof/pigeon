@@ -36,6 +36,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   * pi process still alive past `PI_TIMEOUT` → killed; the worker restarts
     the task with `pi --continue` (up to `MAX_RETRIES`),
   * task stuck without a process past the timeout → marked failed.
+* **Restart-safe queueing**: every queued message and the running task are
+  persisted in `<room dir>/.pigeon.json`. On container (re)start pigeon
+  re-queues them — interrupted runs resume the pi session (`--continue`),
+  so no message is lost in a restart.
+* **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
+  runs and exits immediately — the container does not linger until the
+  grace-period SIGKILL.
 * `GET /health` returns server status, **pi configuration status**,
   heartbeat info, counters and all tasks (status, age, process alive) —
   200 when healthy, 503 degraded.
