@@ -19,7 +19,7 @@ COPY requirements.txt .
 # PEP 668: Debian python is externally managed -> use a venv
 RUN python3 -m venv /app/.venv \
     && /app/.venv/bin/pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+COPY app.py wsgi.py .
 
 # default paths (overridable via env / compose)
 ENV BOTS_DIR=/bots \
@@ -27,4 +27,11 @@ ENV BOTS_DIR=/bots \
 RUN mkdir -p /bots /pi-home
 
 EXPOSE 8080
-CMD ["/app/.venv/bin/python", "app.py"]
+# production WSGI server; single worker (in-process state), threaded
+CMD ["/app/.venv/bin/gunicorn",
+     "--bind", "0.0.0.0:8080",
+     "--workers", "1",
+     "--threads", "32",
+     "--access-logfile", "-",
+     "--error-logfile", "-",
+     "wsgi:app"]

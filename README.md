@@ -147,13 +147,15 @@ configured via pi's default config files — see [docs/docker.md](docs/docker.md
 
 ```
 app.py            the whole server (Flask, stdlib only otherwise)
-Dockerfile        node:24 + python3 + pi image
+wsgi.py           gunicorn entrypoint (post_fork -> app.startup())
+Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example
 LICENSE           MIT
 bots/             one folder per bot (bind mount), rooms/ inside
 docs/docker.md    docker + pi configuration documentation
 test/smoke.py     local end-to-end test with fake pi + fake Nextcloud
+test/nc_stub.py   fake Nextcloud (bot API, verifies outgoing signatures)
 ```
 
 Test without Docker:
@@ -164,7 +166,9 @@ python test/smoke.py   # starts fake Nextcloud + fake pi, exercises the full flo
 
 ## Notes & limitations (on purpose)
 
-* Uses the Flask dev server — single host, that's it.
+* Production server is **gunicorn** (single worker, threaded — pigeon keeps
+  its state in process memory, so it runs with exactly one worker);
+  `python app.py` (Flask dev server) still works for local tinkering.
 * The bot posts results as the bot identity via the signed bot API; it does
   not reply thread-style to the triggering message.
 * Message text is sent to pi verbatim as the prompt; there is no templating.

@@ -108,7 +108,7 @@ threading.Thread(target=_nc.serve_forever, daemon=True).start()
 # app ------------------------------------------------------------------------
 import app  # noqa: E402
 import traceback  # noqa: E402
-threading.Thread(target=app._heartbeat_loop, daemon=True).start()
+app.startup()  # same init as the gunicorn post_fork hook
 from werkzeug.serving import run_simple  # noqa: E402
 
 

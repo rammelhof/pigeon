@@ -566,26 +566,37 @@ def webhook(bot):
     return jsonify({"queued": True, "bot": bot, "room_folder": folder}), 202
 
 
-if __name__ == "__main__":
-    def _shutdown(signum, frame):
-        """Kill active pi process groups and exit so docker stop is fast."""
-        log.info("received %s, stopping active pi runs", signum)
-        with _lock:
-            procs = [t["proc"] for t in _tasks.values()
-                     if t["proc"] is not None and t["proc"].poll() is None]
-        for p in procs:
+def _shutdown(signum, frame):
+    """Kill active pi process groups and exit so docker stop is fast."""
+    log.info("received %s, stopping active pi runs", signum)
+    with _lock:
+        procs = [t["proc"] for t in _tasks.values()
+                 if t["proc"] is not None and t["proc"].poll() is None]
+    for p in procs:
+        try:
+            if hasattr(os, "killpg"):  # Linux/Docker: kill whole group
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            else:
+                p.kill()
+        except Exception:
             try:
-                if hasattr(os, "killpg"):  # Linux/Docker: kill whole group
-                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                else:
-                    p.kill()
+                p.kill()
             except Exception:
-                try:
-                    p.kill()
-                except Exception:
-                    pass
-        os._exit(128 + signum)
+                pass
+    os._exit(128 + signum)
 
+
+_started = False
+
+
+def startup():
+    """One-time init: signal handlers, dirs, resume from state files,
+    heartbeat. Runs once per process — called from gunicorn's post_fork
+    (wsgi.py) or __main__ below."""
+    global _started
+    if _started:
+        return
+    _started = True
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
     os.makedirs(BOTS_DIR, exist_ok=True)
@@ -594,7 +605,13 @@ if __name__ == "__main__":
         log.info("resumed %d job(s) from before the restart", resumed)
     t = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
     t.start()
+    log.info("pigeon %s (%s) ready, bots in %s, pi config in %s",
+             VERSION, COMMIT, BOTS_DIR, PI_CONFIG_DIR)
+
+
+if __name__ == "__main__":
+    startup()
     port = int(os.environ.get("PORT", "8080"))
-    log.info("pigeon %s (%s) listening on :%d, bots in %s, pi config in %s",
-             VERSION, COMMIT, port, BOTS_DIR, PI_CONFIG_DIR)
+    log.info("listening on :%d (flask dev server — use gunicorn in docker)",
+             port)
     app.run(host="0.0.0.0", port=port)
