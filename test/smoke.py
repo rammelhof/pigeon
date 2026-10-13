@@ -17,6 +17,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
+
+try:  # Windows consoles are cp1252 by default
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -34,6 +41,7 @@ os.environ.update({
     "PI_CODING_AGENT_DIR": PI_CFG,
     "PI_TIMEOUT": "3",
     "HEARTBEAT_INTERVAL": "1",
+    "SCHEDULER_INTERVAL": "1",
     "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
     "LOG_LEVEL": "INFO",
@@ -333,6 +341,62 @@ check("heartbeat re-queues stale disk job (crash recovery)",
 state = json.load(open(os.path.join(resume_dir, ".pigeon.json")))
 check("state file clean after resume",
       state.get("pending") == [] and state.get("running") is None, str(state))
+
+# 12. scheduler: due entries in schedules.json fire as room messages,
+# next_run advances; entries without a room token or invalid ones are skipped
+from zoneinfo import ZoneInfo  # noqa: E402
+sched_dir = os.path.join(BOTS_TEST, "bot6", "rooms", "news-room")
+os.makedirs(sched_dir)
+with open(os.path.join(sched_dir, ".room.json"), "w") as f:
+    json.dump({"token": "sched6ro"}, f)
+sched_file = os.path.join(sched_dir, "schedules.json")
+with open(sched_file, "w") as f:
+    json.dump({"schedules": [
+        {"id": "at-news", "prompt": "Send the Austrian news brief.",
+         "time": "09:00", "tz": "Europe/Vienna",
+         "next_run": time.time() - 10},
+        {"id": "interval-check", "prompt": "Interval check.",
+         "every_minutes": 60, "next_run": time.time() - 10},
+    ]}, f)
+# a room whose schedules are due but which never got a webhook message
+# (no .room.json -> no token) must NOT produce any post
+notok_dir = os.path.join(BOTS_TEST, "bot6", "rooms", "no-token")
+os.makedirs(notok_dir)
+with open(os.path.join(notok_dir, "schedules.json"), "w") as f:
+    json.dump({"schedules": [
+        {"id": "no-token-room", "prompt": "Should never post.",
+         "time": "08:00", "tz": "Europe/Vienna",
+         "next_run": time.time() - 10},
+    ]}, f)
+t = wait_room_done("bot6/rooms/news-room", timeout=20, min_count=2)
+check("scheduler fired due entries in the room",
+      bool(t) and t["status"] == "done", str(t))
+posted_before = [m for room, m in nc_stub.H.received if room == "sched6ro"]
+posted_after = [m for room, m in nc_stub.H.received if room == "sched6ro"]
+t = wait_room_done("bot6/rooms/news-room", timeout=10, min_count=2)
+check("scheduler tasks replied in the room (signed bot API posts)",
+      len(posted_after) >= 2, str(len(posted_after)))
+tasks_now = tasks()["tasks"]
+check("scheduler skips rooms without a room token (no task, no post)",
+      not [x for x in tasks_now
+           if "no-token" in x["room_cwd"].replace("\\", "/")], str(tasks_now))
+new_state = json.load(open(sched_file))
+by_id = {e["id"]: e for e in new_state["schedules"]}
+now = time.time()
+vienna = datetime.fromtimestamp(
+    by_id["at-news"]["next_run"], ZoneInfo("Europe/Vienna"))
+check("daily next_run advanced to the next 09:00 in Europe/Vienna",
+      by_id["at-news"]["next_run"] > now and vienna.hour == 9
+      and vienna.minute == 0, str(by_id["at-news"]))
+check("interval next_run advanced by 60 minutes",
+      by_id["interval-check"]["next_run"] > now
+      and by_id["interval-check"]["next_run"] < now + 61 * 60,
+      str(by_id["interval-check"]))
+
+t = wait_room_done("bot6/rooms/news-room", timeout=10, min_count=3)
+posted = [m for room, m in nc_stub.H.received if room == "sched6ro"]
+check("due entry not fired twice by later scans",
+      len(posted) == len(posted_after), str(len(posted)))
 
 print()
 if failures:

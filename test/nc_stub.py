@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class H(BaseHTTPRequestHandler):
+    # every bot API message received (room token, message) — for tests
+    received = []
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -44,6 +46,8 @@ class H(BaseHTTPRequestHandler):
                     return
             print("STUB bot-api  sig-ok msg=" + json.dumps(body)[:60],
                   flush=True)
+            H.received.append((self.path.split("/bot/")[1].split("/")[0],
+                               message))
             self._json({"ok": True}, code=201)
         else:
             self._json({"ok": True})

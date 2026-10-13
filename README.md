@@ -48,6 +48,12 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   periodically by the state scan — pigeon re-queues them, so no message
   is lost in a restart or crash; and since every room always runs in its
   stable pi session, context survives too.
+* **Skills & scheduled tasks**: pi skills live in `./skills/` (mounted to
+  `$PI_CODING_AGENT_DIR/skills`) — `scheduler` lets you tell the bot things
+  like *"send me news for austria every day at 09:00"*; it maintains a
+  `schedules.json` per room that pigeon's scheduler thread checks every
+  `SCHEDULER_INTERVAL` seconds and fires as normal room messages
+  (daily `HH:MM` + IANA timezone, or every N minutes).
 * **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
   runs and exits immediately — the container does not linger until the
   grace-period SIGKILL.
@@ -141,19 +147,58 @@ All configuration is via environment variables (see `.env.example`):
 | `PI_TIMEOUT` | `600` | Seconds before the heartbeat kills a pi run |
 | `HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeat checks |
 | `STATE_SCAN_EVERY` | `10` | Every Nth heartbeat also scans state files and re-queues stale jobs (crash self-healing) |
+| `SCHEDULER_INTERVAL` | `30` | Seconds between checks of room `schedules.json` files (scheduled tasks) |
 | `MAX_RETRIES` | `1` | Reruns a failed/timed-out task in the same room session |
 | `BOTS_DIR` | `/bots` | Where per-bot room folders live |
 | `PI_CODING_AGENT_DIR` | `/pi-home/agent` | pi config dir (auth.json, models.json, sessions) |
 | `PORT` | `8080` | HTTP port |
 
-pi itself (model, thinking level, provider keys, extensions, skills) is
+pi itself (model, thinking level, provider keys, extensions) is
 configured via pi's default config files — see [docs/docker.md](docs/docker.md).
+Skills are plain folders — see below.
+
+## Skills & scheduled tasks
+
+pi supports [skills](https://github.com/badlogic/pi-skills) — folders with a `SKILL.md`
+(name + description + instructions, optionally scripts). pigeon ships two:
+
+* **`scheduler`** — teaches pi how to manage this room's `schedules.json`
+  (create / list / change / delete scheduled tasks).
+* **`austria-news`** — example content skill (fetches Austrian headlines).
+
+They live in `./skills/` and are mounted into the container at
+`$PI_CODING_AGENT_DIR/skills` (pi's user skills dir). **Add your own skills
+by dropping a folder in `./skills/`** and recreating the container.
+
+### Scheduling
+
+Because of the `scheduler` skill, you can just ask the bot in a room:
+
+> send me news for austria every day at 09:00
+> list all scheduled tasks
+> remove the news schedule
+
+pi writes a `schedules.json` into the room folder, e.g.
+`{"schedules": [{"id": "at-news", "prompt": "…", "time": "09:00",
+"tz": "Europe/Vienna"}]}`. pigeon's scheduler thread checks those files
+every `SCHEDULER_INTERVAL` seconds; when an entry is due it sends its
+`prompt` to the room like a normal chat message (same pi session, same
+queue, survives restarts — `next_run` is persisted). Supported entries:
+
+* daily at `HH:MM` in an IANA timezone (`time` + `tz`)
+* every N minutes (`every_minutes` ≥ 5)
+
+A room only gets scheduled messages after it has received at least one
+webhook message (pigeon stores the room's conversation token in
+`.room.json` to post to).
+
 
 ## Files
 
 ```
 app.py            the whole server (Flask, stdlib only otherwise)
 wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> app.startup())
+skills/           pi skills mounted into the container (scheduler, austria-news, …)
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example

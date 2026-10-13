@@ -1,0 +1,47 @@
+---
+name: scheduler
+description: Create, list, change or delete scheduled tasks for this chat room — one-time, daily at HH:MM (with timezone) or every N minutes. Use when the user asks to send or do something at a certain time, daily, or at an interval, or asks which tasks are scheduled.
+---
+
+# Room scheduler (pigeon)
+
+The pigeon server runs a scheduler that watches **`schedules.json` in the
+current working directory** (this room's folder). When an entry is due,
+pigeon sends its `prompt` to this room exactly like a normal chat message —
+you (pi) then handle it with full room context and skills.
+
+## File format
+
+```json
+{
+  "schedules": [
+    {"id": "at-news", "prompt": "Send the top Austrian news of the day.", "time": "09:00", "tz": "Europe/Vienna"},
+    {"id": "standup", "prompt": "Summarize open tasks for today.", "every_minutes": 60}
+  ]
+}
+```
+
+| field | meaning |
+|---|---|
+| `id` | short unique slug per room (`at-news`, `backup-check`, …) |
+| `prompt` | self-contained instruction of what to do when it fires. Include all context the fired run needs (no one types extra text). |
+| `time` | `"HH:MM"` 24h local time (daily). Combine with `tz`. |
+| `tz` | IANA timezone name, e.g. `Europe/Vienna`. Default it to the user's local zone; `Europe/Vienna` if unknown. |
+| `every_minutes` | number, ≥ 5 — repeat at this interval instead of a clock time. |
+
+## Rules
+
+* `schedules.json` is **pi-managed**: read it, edit it with your file tools,
+  write it back atomically (temp file + rename) and keep it valid JSON.
+  If it does not exist, start from `{"schedules": []}`.
+* **Never set or modify `next_run`** — pigeon computes and maintains it.
+  (You may read it to tell the user when something runs next.)
+* An entry needs either `time`+`tz` (daily) **or** `every_minutes` — never both.
+* When the user says **"list the scheduled tasks"** (or similar): read
+  `schedules.json` and present every entry in human-readable form, e.g.
+  `at-news — daily at 09:00 (Europe/Vienna): Send the top Austrian news.`
+  If the file is missing or empty: "No scheduled tasks."
+* To change a task, edit its entry (keep the `id`); to delete, remove the
+  entry. After any change, confirm in the room what is now scheduled.
+* Schedules keep working across restarts; the fired run happens in this
+  room's pi session, so it sees the conversation context.

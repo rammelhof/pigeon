@@ -95,6 +95,13 @@ docker run --rm -v pi-home:/data -v "$PWD":/backup alpine \
 > deliberately want the container to share your host pi configuration and
 > credentials.
 
+### `./skills` → `/pi-home/agent/skills` (bind mount, read-only)
+
+pi's user skills directory. pigeon ships the `scheduler` and
+`austria-news` skills; add your own by dropping a folder (with a
+`SKILL.md`) into `./skills/` and running `docker compose up -d` again.
+See section 8.2.
+
 ## 4. pi configuration
 
 pigeon passes **no** model or API-key settings to pi. Pi is configured
@@ -144,6 +151,7 @@ All in `.env` (compose reads it automatically):
 | behaviour | `PI_TIMEOUT` | heartbeat kills a pi run after this many seconds |
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
 | behaviour | `STATE_SCAN_EVERY` | every Nth heartbeat also scans the `.pigeon.json` files and re-queues jobs that are on disk but no longer tracked in memory (crash self-healing; default 10 → every ~5 min) |
+| behaviour | `SCHEDULER_INTERVAL` | seconds between checks of the rooms' `schedules.json` files (default 30) |
 | behaviour | `MAX_RETRIES` | how often a failed/timed-out task is rerun in the same room session |
 | behaviour | `PORT` | HTTP port (published as `8080:8080`) |
 
@@ -213,6 +221,48 @@ per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
   runs and exits, so the container stops in well under a second. If the
   stop takes ~10 s, you are running an old image without the shutdown
   handler — rebuild with `docker compose up -d --build`.
+
+## 8.2 Skills & scheduled tasks
+
+**Skills.** pi loads skills from `$PI_CODING_AGENT_DIR/skills`
+(`/pi-home/agent/skills`), which compose bind-mounts from `./skills/`
+(read-only). Each skill is a folder with a `SKILL.md` (frontmatter
+`name`/`description` + instructions, optionally scripts). pi advertises
+skills in its system prompt and loads the full instructions when a task
+matches — you can also force one with `/skill:<name>`. Two are shipped:
+
+* `scheduler` — how to manage this room's `schedules.json`,
+* `austria-news` — example: fetch and brief Austrian headlines.
+
+Add your own skills to `./skills/` (no rebuild needed — the mount picks
+them up; restart the container to be safe).
+
+**Scheduling.** With the `scheduler` skill you simply ask the bot in a
+room, e.g. *"send me news for austria every day at 09:00"* or
+*"list all scheduled tasks"*. pi maintains `<room dir>/schedules.json`:
+
+```json
+{"schedules": [
+  {"id": "at-news", "prompt": "Send the Austrian news brief.",
+   "time": "09:00", "tz": "Europe/Vienna"},
+  {"id": "backup-check", "prompt": "…", "every_minutes": 60}
+]}
+```
+
+pigeon's scheduler thread checks these files every `SCHEDULER_INTERVAL`
+seconds. Due entries send their `prompt` to the room like a normal chat
+message — same pi session, same queue, same retry/timeout semantics, and
+`next_run` is persisted before firing, so restarts and crashes neither
+lose nor duplicate a run. Notes:
+
+* a room only receives scheduled messages after it got at least one real
+  webhook message (pigeon stores the conversation token in
+  `<room dir>/.room.json` to post to); otherwise due entries are skipped
+  and logged,
+* timezones are IANA names (`Europe/Vienna`); the container image
+  includes the tz database,
+* the fired run happens in the room's pi session, so it has full
+  conversation context.
 
 ## 9. Troubleshooting
 

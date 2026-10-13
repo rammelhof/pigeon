@@ -47,6 +47,8 @@ import signal
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, jsonify, request
@@ -72,6 +74,8 @@ PI_TIMEOUT = float(os.environ.get("PI_TIMEOUT", "600"))           # seconds
 HEARTBEAT_INTERVAL = float(os.environ.get("HEARTBEAT_INTERVAL", "30"))
 # scan state files for stale jobs every Nth heartbeat (crash self-healing)
 STATE_SCAN_EVERY = int(os.environ.get("STATE_SCAN_EVERY", "10"))
+# how often the scheduler checks schedules.json files (seconds)
+SCHEDULER_INTERVAL = float(os.environ.get("SCHEDULER_INTERVAL", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
@@ -194,6 +198,150 @@ def id_counter():
     with _lock:
         _task_counter += 1
         return _task_counter
+
+
+# --------------------------------------------------------- scheduler ------
+# Rooms can define schedules in <room dir>/schedules.json (managed by pi
+# via the "scheduler" skill):
+#   {"schedules": [
+#      {"id": "at-news", "prompt": "...", "time": "09:00", "tz": "Europe/Vienna"},
+#      {"id": "check",   "prompt": "...", "every_minutes": 15}
+#   ]}
+# When an entry is due, pigeon sends its prompt to the room as a normal
+# message (same pipeline as a chat message, same pi session).
+# next_run is maintained by pigeon and persisted into the file.
+
+_scheduler = {"last_run": None}
+
+
+def _room_token(cwd):
+    """Conversation token of the room (written by the webhook)."""
+    try:
+        with open(os.path.join(cwd, ".room.json")) as f:
+            return (json.load(f) or {}).get("token")
+    except Exception:
+        return None
+
+
+def _write_room_token(cwd, token):
+    path = os.path.join(cwd, ".room.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"token": token}, f)
+    os.replace(tmp, path)
+
+
+def _next_daily(entry, now):
+    """Next occurrence of the entry's local time HH:MM in its IANA tz."""
+    try:
+        zone = ZoneInfo(entry.get("tz") or "UTC")
+        hh, mm = (entry["time"] or "00:00").split(":")
+        local = datetime.fromtimestamp(now, zone)
+        cand = local.replace(hour=int(hh), minute=int(mm),
+                             second=0, microsecond=0)
+        if cand <= local:
+            cand += timedelta(days=1)
+        return cand.timestamp()
+    except Exception as e:
+        log.warning("scheduler: bad daily entry %r: %s", entry, e)
+        return None
+
+
+def _sched_kind_ok(entry):
+    if (entry.get("time") or "").strip():
+        return True
+    every = entry.get("every_minutes")
+    return isinstance(every, (int, float)) and not isinstance(every, bool) \
+        and every > 0
+
+
+def _initial_next_run(entry, now):
+    if (entry.get("time") or "").strip():
+        return _next_daily(entry, now)
+    every = entry.get("every_minutes")
+    if _sched_kind_ok(entry):
+        return now + every * 60
+    return None
+
+
+def _advance_next_run(entry, now):
+    if (entry.get("time") or "").strip():
+        return _next_daily(entry, now)
+    if _sched_kind_ok(entry):
+        return now + entry["every_minutes"] * 60
+    return None
+
+
+def _scheduler_tick():
+    now = time.time()
+    if not os.path.isdir(BOTS_DIR):
+        return
+    for bot in sorted(os.listdir(BOTS_DIR)):
+        rooms_dir = os.path.join(BOTS_DIR, bot, "rooms")
+        if not os.path.isdir(rooms_dir):
+            continue
+        for folder in sorted(os.listdir(rooms_dir)):
+            cwd = os.path.join(rooms_dir, folder)
+            path = os.path.join(cwd, "schedules.json")
+            if not os.path.isdir(cwd) or not os.path.exists(path):
+                continue
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except Exception as e:
+                log.warning("scheduler: %s/%s: unreadable schedules.json: %s",
+                            bot, folder, e)
+                continue
+            schedules = (data or {}).get("schedules")
+            if not isinstance(schedules, list):
+                continue
+            due = []
+            changed = False
+            for entry in schedules:
+                if not isinstance(entry, dict) or \
+                        not (entry.get("prompt") or "").strip():
+                    continue
+                if entry.get("next_run") is None:
+                    entry["next_run"] = _initial_next_run(entry, now)
+                    changed = True
+                if entry.get("next_run") is not None and \
+                        entry["next_run"] <= now:
+                    due.append(entry)
+            if not due and not changed:
+                continue
+            # advance due entries and persist BEFORE enqueueing (so a crash
+            # right after can never double-fire a schedule)
+            for entry in due:
+                entry["next_run"] = _advance_next_run(entry, now)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, path)
+            for entry in due:
+                token = _room_token(cwd)
+                if not token:
+                    log.warning("scheduler: %s/%s: entry %r due but no room "
+                                "token yet (.room.json) — skipped",
+                                bot, folder, entry.get("id"))
+                    continue
+                enqueue(f"{bot}/{folder}", bot, {
+                    "room": token, "room_id": folder,
+                    "message": entry["prompt"], "sender": "scheduler",
+                    "cwd": cwd,
+                })
+                log.info("scheduler: fired %s/%s entry %r: %r",
+                         bot, folder, entry.get("id"),
+                         (entry.get("prompt") or "")[:60])
+
+
+def _scheduler_loop():
+    while True:
+        _scheduler["last_run"] = time.time()
+        try:
+            _scheduler_tick()
+        except Exception as e:
+            log.warning("scheduler tick failed: %s", e)
+        time.sleep(SCHEDULER_INTERVAL)
 
 
 # ------------------------------------------------------------- pi run ----
@@ -321,13 +469,6 @@ def requeue_stale():
                 log.warning("re-queued stale job %s/%s: %r (room=%s)",
                             bot, folder, message[:50], room)
     return requeued
-
-
-def id_counter():
-    global _task_counter
-    with _lock:
-        _task_counter += 1
-        return _task_counter
 
 
 def run_job(key, bot, job):
@@ -534,6 +675,7 @@ def health():
         "commit": COMMIT,
         "pi": {"configured": pi_ok, "config_file": pi_config_file},
         "heartbeat": hb,
+        "scheduler": dict(_scheduler),
         "stats": stats,
         "tasks": tasks,
     }), (200 if ok else 503)
@@ -598,6 +740,7 @@ def webhook(bot):
     folder = folder_for_room(room, room_name)
     cwd = os.path.join(BOTS_DIR, bot, "rooms", folder)
     os.makedirs(cwd, exist_ok=True)
+    _write_room_token(cwd, room)  # needed for scheduled tasks to reply
 
     key = f"{bot}/{folder}"
     enqueue(key, bot, {
@@ -649,6 +792,8 @@ def startup():
     if resumed:
         log.info("resumed %d job(s) from before the restart", resumed)
     t = threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat")
+    t.start()
+    t = threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler")
     t.start()
     log.info("pigeon %s (%s) ready, bots in %s, pi config in %s",
              VERSION, COMMIT, BOTS_DIR, PI_CONFIG_DIR)
