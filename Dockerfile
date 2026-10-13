@@ -9,33 +9,55 @@ RUN apt-get update \
         ripgrep curl wget \
     && rm -rf /var/lib/apt/lists/*
 
-# tool belt for the agent (editors, archivers, text, net, db clients, docs)
-# NOTE: this makes the image several GB (libreoffice, ffmpeg, ...)
+# tool belt for the agent — one RUN per group so a build failure names the
+# offending layer. NOTE: office/media make the image several GB.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        # editors / terminal
         less nano neovim htop tmux tree file \
-        # archive / compression
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         unzip zip rsync xz-utils 7zip p7zip-full unrar-free \
-        # text / data formats
-        jq yq pandoc dos2unix fonts-dejavu \
-        # build
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        jq yq pandoc dos2unix xmlstarlet fonts-dejavu \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config \
-        # net
-        httpie openssh-client axel netcat-openbsd dnsutils lsof \
-        # databases
-        sqlite3 libsqlite3-dev redis-tools \
-        # headers for pip builds (cryptography, psycopg2, ...)
         libssl-dev zlib1g-dev libffi-dev libpq-dev \
-        # documents / PDF / OCR
-        poppler-utils ghostscript qpdf xmlstarlet \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        httpie openssh-client axel netcat-openbsd dnsutils lsof \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        sqlite3 libsqlite3-dev redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        poppler-utils ghostscript qpdf \
         tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
         hunspell hunspell-en-us hunspell-de-at \
         fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
-        # office / media (headless)
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         libreoffice-writer libreoffice-calc libreoffice-impress \
         imagemagick ffmpeg \
-        # programming helpers
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         gh \
     && rm -rf /var/lib/apt/lists/*
 
