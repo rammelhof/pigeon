@@ -30,7 +30,7 @@ RUN apt-get update \
         # documents / PDF / OCR
         poppler-utils ghostscript qpdf xmlstarlet \
         tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
-        hunspell hunspell-en hunspell-de \
+        hunspell hunspell-en-us hunspell-de-at \
         fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
         # office / media (headless)
         libreoffice-writer libreoffice-calc libreoffice-impress \
