@@ -2,9 +2,32 @@
 FROM node:24-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+# core runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv ca-certificates git ripgrep curl \
+        python3 python3-pip python3-venv python3-dev ca-certificates git \
+        ripgrep curl wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# tool belt for the agent (editors, archivers, text, net, db clients, docs)
+# NOTE: this makes the image several GB (libreoffice, ffmpeg, ...)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        # editors / terminal
+        less nano neovim htop tmux tree file \
+        # archive / compression
+        unzip zip rsync xz-utils 7zip p7zip-full unrar-free \
+        # text / data formats
+        jq yq pandoc dos2unix fonts-dejavu \
+        # build
+        build-essential cmake pkg-config \
+        # net
+        httpie openssh-client axel \
+        # databases
+        sqlite3 libsqlite3-dev postgresql-client mysql-client redis-tools \
+        # office / media (headless)
+        libreoffice-writer libreoffice-calc libreoffice-impress \
+        imagemagick ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # pi coding agent (CLI)
