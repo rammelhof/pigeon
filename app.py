@@ -79,11 +79,6 @@ STATE_SCAN_EVERY = int(os.environ.get("STATE_SCAN_EVERY", "10"))
 SCHEDULER_INTERVAL = float(os.environ.get("SCHEDULER_INTERVAL", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-# file attachments: max download size; optional HTTP basic auth for the
-# share links (only needed when your Talk file shares require login)
-MAX_FILE_SIZE_MB = float(os.environ.get("MAX_FILE_SIZE_MB", "100"))
-NC_USER = os.environ.get("NEXTCLOUD_USER", "")
-NC_PASS = os.environ.get("NEXTCLOUD_PASSWORD", "")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -142,94 +137,6 @@ def post_message(room, message):
                       headers=headers, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")
-
-
-# --------------------------------------------- file attachments ---------
-# Talk sends file attachments as a {file} rich-object placeholder whose
-# parameter carries a public share link. We download it into the room's
-# chat/files/ and replace the placeholder with a hint for pi.
-
-def _fmt_size(n):
-    n = float(n)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024 or unit == "TB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
-
-
-def _payload_file_param(payload):
-    """The file rich-object parameter of a webhook payload, or None."""
-    try:
-        content = json.loads(
-            (payload.get("object") or {}).get("content") or "{}")
-        f = (content.get("parameters") or {}).get("file")
-        return f if isinstance(f, dict) else None
-    except Exception:
-        return None
-
-
-def download_file(param, dest_dir):
-    """Download a file parameter's share link into dest_dir.
-    Returns (saved basename, size in bytes)."""
-    link = (param.get("link") or "").strip()
-    if not link:
-        raise RuntimeError("file parameter has no link")
-    name = re.sub(r"[^A-Za-z0-9._-]+", "_",
-                  os.path.basename(name_or(param.get("name")))
-                  ).strip("._") or "file"
-    name = name[:100]
-    os.makedirs(dest_dir, exist_ok=True)
-    stamp = int(time.time())
-    dest = os.path.join(dest_dir, f"{stamp}-{name}")
-    i, dot = 1, name.rfind(".")
-    while os.path.exists(dest):
-        base, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
-        dest = os.path.join(dest_dir, f"{stamp}-{base}_{i}{ext}")
-        i += 1
-    url = link + ("&" if "?" in link else "?") + "download"
-    auth = (NC_USER, NC_PASS) if NC_USER else None
-    cap = int(MAX_FILE_SIZE_MB * 1024 * 1024)
-    size, tmp = 0, dest + ".part"
-    try:
-        with requests.get(url, stream=True, auth=auth, timeout=(10, 600)) as r:
-            if r.status_code >= 400:
-                raise RuntimeError(f"share returned {r.status_code}")
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(1 << 16):
-                    size += len(chunk)
-                    if size > cap:
-                        raise RuntimeError(
-                            f"file exceeds {MAX_FILE_SIZE_MB:.0f} MB cap")
-                    f.write(chunk)
-    except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
-    os.replace(tmp, dest)
-    return os.path.basename(dest), size
-
-
-def name_or(v):
-    return v if isinstance(v, str) and v.strip() else "file"
-
-
-def _handle_file(f, cwd):
-    """Download the attachment into <cwd>/chat/files and return the hint
-    text that replaces the {file} placeholder (never raises)."""
-    name = name_or(f.get("name"))
-    link = f.get("link") or ""
-    mime = f.get("mimetype") or "unknown type"
-    try:
-        saved, size = download_file(f, os.path.join(cwd, "chat", "files"))
-        log.info("downloaded file %s -> chat/files/%s (%s)",
-                 name, saved, _fmt_size(size))
-        return (f"[file: {name} ({mime}, {_fmt_size(size)})] — "
-                f"downloaded to chat/files/{saved} in the working "
-                f"directory")
-    except Exception as e:
-        log.warning("file download failed: %s", e)
-        return (f"[file: {name} ({mime})] — download failed ({e})"
-                + (f"; share link: {link}" if link else ""))
 
 
 def folder_for_room(room_id, room_name):
@@ -998,12 +905,6 @@ def webhook(bot):
     cwd = os.path.join(BOTS_DIR, bot, "rooms", folder)
     os.makedirs(cwd, exist_ok=True)
     _write_room_token(cwd, room)  # needed for scheduled tasks to reply
-
-    # file attachment: download it and point pi at the local copy
-    if "{file}" in message:
-        f = _payload_file_param(payload)
-        hint = _handle_file(f, cwd) if f else "[file: no file data in payload]"
-        message = message.replace("{file}", hint)
 
     key = f"{bot}/{folder}"
     enqueue(key, bot, {

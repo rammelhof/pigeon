@@ -171,18 +171,6 @@ All in `.env` (compose reads it automatically):
   `X-Nextcloud-Talk-Random` / `X-Nextcloud-Talk-Signature`), so the body
   itself does not contain the secret — still, keep the endpoint behind TLS
   on untrusted networks.
-* **File attachments** arrive as a `{file}` rich-object placeholder whose
-  parameter carries a public share link. pigeon downloads that link
-  (`GET <link>?download`) into the room's `chat/files/` folder *before*
-  queueing the task and rewrites the placeholder to
-  `[file: <name> (<mimetype>, <size>)] — downloaded to chat/files/<file> in
-  the working directory`, so pi can inspect the file with its tools. The
-  download is capped at `MAX_FILE_SIZE_MB` and partial files are removed
-  on failure. If the download fails (broken link, too big, share needs
-  login), the placeholder becomes a failure hint that keeps the share
-  link — the task still runs. Set `NEXTCLOUD_USER`/`NEXTCLOUD_PASSWORD`
-  if your Talk file shares require a login to download (otherwise the
-  public link is used unauthenticated).
 
 ## 7. Heartbeat & task monitoring
 

@@ -10,11 +10,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     # every bot API message received (room token, message) — for tests
     received = []
-    # every share download requested (path) — for tests
-    downloads = []
-    # share tokens that should 404 (broken links) — for tests
-    broken_shares = {"missing-share"}
-    file_bytes = b"FAKE-IMAGE-BYTES-1234"
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -28,19 +23,6 @@ class H(BaseHTTPRequestHandler):
         return self.rfile.read(n).decode()
 
     def do_GET(self):
-        if self.path.startswith("/s/"):
-            H.downloads.append(self.path)
-            token = self.path.split("/")[2].split("?")[0]
-            if token in H.broken_shares:
-                self._json({"error": "not found"}, code=404)
-                return
-            body = H.file_bytes
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
         self._json({"ok": True})
 
     def do_POST(self):
