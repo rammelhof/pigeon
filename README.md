@@ -55,8 +55,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   at 09:00"* or *"every hour between 10:00 and 22:00"*; it maintains a
   `schedules.json` per room that pigeon's scheduler thread checks every
   `SCHEDULER_INTERVAL` seconds and fires as normal room messages
-  (daily `HH:MM` + IANA timezone, or every N minutes, optionally confined
-  to a local time `window`).
+  (daily `HH:MM` + IANA timezone, or every N minutes — optionally
+  anchored at a `start_time` and/or confined to a local time `window`).
 * **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
   runs and exits immediately — the container does not linger until the
   grace-period SIGKILL.

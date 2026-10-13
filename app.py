@@ -313,11 +313,80 @@ def _next_window_start(entry, ts):
     return cand.timestamp()
 
 
+# optional phase anchor for interval schedules: "start_time": "10:30"
+# runs then happen at 10:30, 10:30+I, 10:30+2I, ... (wall clock) in the
+# entry's timezone — the next run is fully predictable and stays stable
+# across restarts, instead of drifting as now+interval.
+
+def _entry_tz(entry):
+    """Timezone of an interval entry: window.tz, else tz, else UTC."""
+    w = entry.get("window")
+    if isinstance(w, dict) and (w.get("tz") or "").strip():
+        return w["tz"]
+    return (entry.get("tz") or "").strip() or "UTC"
+
+
+def _anchor_minutes(entry):
+    """start_time as minutes since local midnight, or None."""
+    st = (entry.get("start_time") or "").strip()
+    if not st:
+        return None
+    try:
+        hh, mm = st.split(":")
+        a = int(hh) * 60 + int(mm)
+        return a if 0 <= a < 1440 else None
+    except Exception:
+        return None
+
+
+def _anchored_next(entry, now):
+    """Next run strictly after now on the phase start_time + N*interval
+    (wall clock in the entry's tz; the phase restarts at start_time each
+    day), skipping candidates outside the window (if any)."""
+    every = int(entry["every_minutes"])  # _sched_kind_ok checked by caller
+    anchor = _anchor_minutes(entry)
+    try:
+        zone = ZoneInfo(_entry_tz(entry))
+    except Exception:
+        return now + every * 60
+    now_dt = datetime.fromtimestamp(now, zone)
+    mid0 = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_len = 1440
+    try:  # DST days have 23/25 h; keep the arithmetic wall-clock safe
+        day_len = int((mid0 + timedelta(days=1)).timestamp()
+                      - mid0.timestamp()) // 60
+    except Exception:
+        pass
+
+    def positions():
+        """All phase positions of one day (minutes since midnight):
+        anchor + k*every, arithmetically (no cumulative drift)."""
+        p, k = [], 0
+        while True:
+            pos = anchor + k * every
+            if pos >= day_len:
+                return p  # next day's phase is handled by the d=1 pass
+            p.append(pos)
+            k += 1
+
+    for d in (0, 1):
+        mid = mid0 if d == 0 else mid0 + timedelta(days=1)
+        for pos in positions():
+            cand = mid + timedelta(minutes=pos)
+            if cand <= now_dt:  # 'now' may have seconds -> strictly after
+                continue
+            if _in_window(entry, cand.timestamp()):
+                return cand.timestamp()
+    return now + every * 60
+
+
 def _initial_next_run(entry, now):
     if (entry.get("time") or "").strip():
         return _next_daily(entry, now)
     every = entry.get("every_minutes")
     if _sched_kind_ok(entry):
+        if _anchor_minutes(entry) is not None:
+            return _anchored_next(entry, now)
         if not _in_window(entry, now):
             return _next_window_start(entry, now)
         return now + every * 60
@@ -328,6 +397,8 @@ def _advance_next_run(entry, now):
     if (entry.get("time") or "").strip():
         return _next_daily(entry, now)
     if _sched_kind_ok(entry):
+        if _anchor_minutes(entry) is not None:
+            return _anchored_next(entry, now)
         nxt = now + entry["every_minutes"] * 60
         if not _in_window(entry, nxt):
             nxt = _next_window_start(entry, nxt)

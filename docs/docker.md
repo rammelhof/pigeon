@@ -260,6 +260,11 @@ room, e.g. *"send me news for austria every day at 09:00"* or
 `window` (only with `every_minutes`) confines runs to a local time
 window; a run that would fall outside snaps to the next window start
 ("every hour between 10:00 and 22:00" → runs at 10, 11, …, 21:00).
+`start_time` ("HH:MM", also only with `every_minutes`) anchors the
+phase: runs happen at `start_time + N·interval` (wall clock, in the
+entry's timezone — `window.tz`, else `tz`, else UTC), so the next run
+is fully predictable and stable across restarts ("every 15 minutes
+starting at 10:30" → 10:30, 10:45, 11:00, …).
 
 pigeon's scheduler thread checks these files every `SCHEDULER_INTERVAL`
 seconds. Due entries send their `prompt` to the room like a normal chat

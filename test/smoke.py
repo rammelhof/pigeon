@@ -405,7 +405,6 @@ VIE = ZoneInfo("Europe/Vienna")
 win_entry = {"prompt": "x", "every_minutes": 60,
              "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
 
-
 def at(day, hh, mm):
     return int(datetime(2026, 10, day, hh, mm, tzinfo=VIE).timestamp())
 
@@ -430,6 +429,32 @@ no_win = {"prompt": "x", "every_minutes": 30}
 nxt = app._advance_next_run(no_win, at(13, 3, 0))
 check("no window: plain interval runs around the clock",
       nxt == at(13, 3, 0) + 30 * 60, str(nxt))
+
+# 15. scheduler start_time anchor: runs on the start_time+N*interval phase
+anch = {"prompt": "x", "every_minutes": 15, "start_time": "10:30",
+        "tz": "Europe/Vienna"}
+nxt = app._initial_next_run(anch, at(13, 10, 20))
+check("anchor: next run before the anchor is the anchor",
+      (datetime.fromtimestamp(nxt, VIE).hour,
+       datetime.fromtimestamp(nxt, VIE).minute) == (10, 30), str(nxt))
+nxt = app._advance_next_run(anch, at(13, 10, 31))
+check("anchor: run advances to the next phase step",
+      (datetime.fromtimestamp(nxt, VIE).hour,
+       datetime.fromtimestamp(nxt, VIE).minute) == (10, 45), str(nxt))
+nxt = app._advance_next_run(anch, at(13, 23, 59))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("anchor: after end of day the phase continues next day",
+      (loc.day, loc.hour, loc.minute) == (14, 10, 30), str(loc))
+anch_win = {"prompt": "x", "every_minutes": 70, "start_time": "10:00",
+            "window": {"start": "10:00", "end": "12:00", "tz": "Europe/Vienna"}}
+nxt = app._advance_next_run(anch_win, at(13, 10, 0))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("anchor+window: in-window phase step is kept (10:00 -> 11:10)",
+      (loc.day, loc.hour, loc.minute) == (13, 11, 10), str(loc))
+nxt = app._advance_next_run(anch_win, at(13, 11, 11))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("anchor+window: out-of-window steps skipped (12:20 -> next day 10:00)",
+      (loc.day, loc.hour, loc.minute) == (14, 10, 0), str(loc))
 
 # 13. bundled skills are copied into the pi config at startup: new skills
 # are added, changed ones are updated, user skills are left untouched
