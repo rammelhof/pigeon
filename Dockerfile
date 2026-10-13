@@ -20,6 +20,8 @@ COPY requirements.txt .
 RUN python3 -m venv /app/.venv \
     && /app/.venv/bin/pip install --no-cache-dir -r requirements.txt
 COPY app.py wsgi.py .
+# bundled pi skills, copied into $PI_CODING_AGENT_DIR/skills at startup
+COPY skills/ /app/skills/
 
 # default paths (overridable via env / compose)
 ENV BOTS_DIR=/bots \

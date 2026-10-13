@@ -48,12 +48,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   periodically by the state scan — pigeon re-queues them, so no message
   is lost in a restart or crash; and since every room always runs in its
   stable pi session, context survives too.
-* **Skills & scheduled tasks**: pi skills live in `./skills/` (mounted to
-  `$PI_CODING_AGENT_DIR/skills`) — `scheduler` lets you tell the bot things
-  like *"send me news for austria every day at 09:00"*; it maintains a
-  `schedules.json` per room that pigeon's scheduler thread checks every
-  `SCHEDULER_INTERVAL` seconds and fires as normal room messages
-  (daily `HH:MM` + IANA timezone, or every N minutes).
+* **Skills & scheduled tasks**: pi skills bundled in the image are copied
+  into `$PI_CODING_AGENT_DIR/skills` (the `pi-home` volume) at every start
+  — bundled ones are updated, your own are kept. The `scheduler` skill
+  lets you tell the bot things like *"send me news for austria every day
+  at 09:00"*; it maintains a `schedules.json` per room that pigeon's
+  scheduler thread checks every `SCHEDULER_INTERVAL` seconds and fires as
+  normal room messages (daily `HH:MM` + IANA timezone, or every N minutes).
 * **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
   runs and exits immediately — the container does not linger until the
   grace-period SIGKILL.
@@ -166,9 +167,13 @@ pi supports [skills](https://github.com/badlogic/pi-skills) — folders with a `
   (create / list / change / delete scheduled tasks).
 * **`austria-news`** — example content skill (fetches Austrian headlines).
 
-They live in `./skills/` and are mounted into the container at
-`$PI_CODING_AGENT_DIR/skills` (pi's user skills dir). **Add your own skills
-by dropping a folder in `./skills/`** and recreating the container.
+They are shipped in the repo (`./skills/`) and baked into the image; at
+startup pigeon copies them into `$PI_CODING_AGENT_DIR/skills` inside the
+`pi-home` volume — bundled skills are **updated on every start** when you
+deploy a new image, while your own skills (other folders in that dir) are
+left untouched. Add your own skills either by dropping a folder into the
+volume's `skills/` dir (user skill) or into `./skills/` in the repo and
+rebuilding (bundled skill).
 
 ### Scheduling
 

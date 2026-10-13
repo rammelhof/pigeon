@@ -95,12 +95,14 @@ docker run --rm -v pi-home:/data -v "$PWD":/backup alpine \
 > deliberately want the container to share your host pi configuration and
 > credentials.
 
-### `./skills` → `/pi-home/agent/skills` (bind mount, read-only)
+### `./skills` → copied into `/pi-home/agent/skills` at startup
 
 pi's user skills directory. pigeon ships the `scheduler` and
-`austria-news` skills; add your own by dropping a folder (with a
-`SKILL.md`) into `./skills/` and running `docker compose up -d` again.
-See section 8.2.
+`austria-news` skills **inside the image** (`/app/skills`); at every
+startup `sync_skills()` copies them into `/pi-home/agent/skills` in the
+`pi-home` volume: bundled skills are updated (delete + copy) when you
+deploy a new image, any other folders (your own skills) are left
+untouched. See section 8.2.
 
 ## 4. pi configuration
 
@@ -152,6 +154,7 @@ All in `.env` (compose reads it automatically):
 | behaviour | `HEARTBEAT_INTERVAL` | seconds between task checks (default 30) |
 | behaviour | `STATE_SCAN_EVERY` | every Nth heartbeat also scans the `.pigeon.json` files and re-queues jobs that are on disk but no longer tracked in memory (crash self-healing; default 10 → every ~5 min) |
 | behaviour | `SCHEDULER_INTERVAL` | seconds between checks of the rooms' `schedules.json` files (default 30) |
+| behaviour | `SKILLS_SRC` | dir in the image with bundled skills, copied to `$PI_CODING_AGENT_DIR/skills` at startup (default `/app/skills`) |
 | behaviour | `MAX_RETRIES` | how often a failed/timed-out task is rerun in the same room session |
 | behaviour | `PORT` | HTTP port (published as `8080:8080`) |
 
@@ -225,17 +228,21 @@ per bot with its own `pi-home` volume and `TALK_BOT_SECRET`.
 ## 8.2 Skills & scheduled tasks
 
 **Skills.** pi loads skills from `$PI_CODING_AGENT_DIR/skills`
-(`/pi-home/agent/skills`), which compose bind-mounts from `./skills/`
-(read-only). Each skill is a folder with a `SKILL.md` (frontmatter
-`name`/`description` + instructions, optionally scripts). pi advertises
-skills in its system prompt and loads the full instructions when a task
-matches — you can also force one with `/skill:<name>`. Two are shipped:
+(`/pi-home/agent/skills` in the `pi-home` volume). pigeon ships the
+`scheduler` and `austria-news` skills inside the image (`/app/skills`)
+and copies them into that dir at **every startup** (`sync_skills`):
+bundled skills are updated when a new image is deployed, other folders
+(user skills added to the volume) are left untouched. Each skill is a
+folder with a `SKILL.md` (frontmatter `name`/`description` + instructions,
+optionally scripts). pi advertises skills in its system prompt and loads
+the full instructions when a task matches — you can also force one with
+`/skill:<name>`. Two are shipped:
 
 * `scheduler` — how to manage this room's `schedules.json`,
 * `austria-news` — example: fetch and brief Austrian headlines.
 
-Add your own skills to `./skills/` (no rebuild needed — the mount picks
-them up; restart the container to be safe).
+Add your own: a folder in the volume's `skills/` dir (per-deployment)
+or in `./skills/` in this repo (bundled, updated with rebuilds).
 
 **Scheduling.** With the `scheduler` skill you simply ask the bot in a
 room, e.g. *"send me news for austria every day at 09:00"* or

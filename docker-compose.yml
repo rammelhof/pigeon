@@ -26,9 +26,8 @@ services:
       # one folder per bot, one sub-folder per Talk room (pi working dirs)
       - ./bots:/bots
       # pi default config files (auth.json, models.json, sessions, ...)
+      # and skills (bundled skills are copied here at startup, see README)
       - pi-home:/pi-home
-      # pi skills ($PI_CODING_AGENT_DIR/skills): scheduler, austria-news, ...
-      - ./skills:/pi-home/agent/skills:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5).status==200 else 1)"]
       interval: 30s
