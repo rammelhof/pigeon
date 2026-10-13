@@ -252,9 +252,14 @@ room, e.g. *"send me news for austria every day at 09:00"* or
 {"schedules": [
   {"id": "at-news", "prompt": "Send the Austrian news brief.",
    "time": "09:00", "tz": "Europe/Vienna"},
-  {"id": "backup-check", "prompt": "…", "every_minutes": 60}
+  {"id": "standup", "prompt": "…", "every_minutes": 60,
+   "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
 ]}
 ```
+
+`window` (only with `every_minutes`) confines runs to a local time
+window; a run that would fall outside snaps to the next window start
+("every hour between 10:00 and 22:00" → runs at 10, 11, …, 21:00).
 
 pigeon's scheduler thread checks these files every `SCHEDULER_INTERVAL`
 seconds. Due entries send their `prompt` to the room like a normal chat

@@ -16,7 +16,8 @@ you (pi) then handle it with full room context and skills.
 {
   "schedules": [
     {"id": "at-news", "prompt": "Send the top Austrian news of the day.", "time": "09:00", "tz": "Europe/Vienna"},
-    {"id": "standup", "prompt": "Summarize open tasks for today.", "every_minutes": 60}
+    {"id": "standup", "prompt": "Summarize open tasks for today.", "every_minutes": 60,
+     "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
   ]
 }
 ```
@@ -28,6 +29,12 @@ you (pi) then handle it with full room context and skills.
 | `time` | `"HH:MM"` 24h local time (daily). Combine with `tz`. |
 | `tz` | IANA timezone name, e.g. `Europe/Vienna`. Default it to the user's local zone; `Europe/Vienna` if unknown. |
 | `every_minutes` | number, ≥ 5 — repeat at this interval instead of a clock time. |
+| `window` | optional, only with `every_minutes`: `{"start": "HH:MM", "end": "HH:MM", "tz": "<IANA>"}` — the run only happens inside this local time window; the next run outside it snaps to the next window start (e.g. `every_minutes: 60, window 10:00–22:00` → runs at 10, 11, …, 21:00 each day). |
+
+For "every hour between 10:00 and 22:00" that is `every_minutes: 60` plus
+the window above. For "every 15 minutes on workdays mornings" use the
+narrowest interval + window the user asked for (no weekday support — tell
+the user if they need one).
 
 ## Rules
 
@@ -36,7 +43,9 @@ you (pi) then handle it with full room context and skills.
   If it does not exist, start from `{"schedules": []}`.
 * **Never set or modify `next_run`** — pigeon computes and maintains it.
   (You may read it to tell the user when something runs next.)
-* An entry needs either `time`+`tz` (daily) **or** `every_minutes` — never both.
+* An entry needs either `time`+`tz` (daily) **or** `every_minutes` — never both;
+  `window` only goes with `every_minutes` (start before end, no wrap over
+  midnight).
 * When the user says **"list the scheduled tasks"** (or similar): read
   `schedules.json` and present every entry in human-readable form, e.g.
   `at-news — daily at 09:00 (Europe/Vienna): Send the top Austrian news.`

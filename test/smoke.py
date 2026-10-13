@@ -399,6 +399,38 @@ posted = [m for room, m in nc_stub.H.received if room == "sched6ro"]
 check("due entry not fired twice by later scans",
       len(posted) == len(posted_after), str(len(posted)))
 
+# 14. scheduler windows: interval entries are confined to a local time
+# window (fixed timestamps, deterministic)
+VIE = ZoneInfo("Europe/Vienna")
+win_entry = {"prompt": "x", "every_minutes": 60,
+             "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
+
+
+def at(day, hh, mm):
+    return int(datetime(2026, 10, day, hh, mm, tzinfo=VIE).timestamp())
+
+
+nxt = app._advance_next_run(win_entry, at(13, 21, 30))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("window: run after the end snaps to the next day's window start",
+      (loc.day, loc.hour, loc.minute) == (14, 10, 0), str(loc))
+nxt = app._advance_next_run(win_entry, at(13, 15, 0))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("window: run inside the window advances by the interval",
+      (loc.day, loc.hour, loc.minute) == (13, 16, 0), str(loc))
+nxt = app._initial_next_run(win_entry, at(13, 3, 0))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("window: initial next run before the window is the window start",
+      (loc.day, loc.hour, loc.minute) == (13, 10, 0), str(loc))
+nxt = app._initial_next_run(win_entry, at(13, 11, 0))
+loc = datetime.fromtimestamp(nxt, VIE)
+check("window: initial next run inside the window adds the interval",
+      (loc.day, loc.hour, loc.minute) == (13, 12, 0), str(loc))
+no_win = {"prompt": "x", "every_minutes": 30}
+nxt = app._advance_next_run(no_win, at(13, 3, 0))
+check("no window: plain interval runs around the clock",
+      nxt == at(13, 3, 0) + 30 * 60, str(nxt))
+
 # 13. bundled skills are copied into the pi config at startup: new skills
 # are added, changed ones are updated, user skills are left untouched
 skills_src = tempfile.mkdtemp()

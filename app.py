@@ -206,7 +206,9 @@ def id_counter():
 # via the "scheduler" skill):
 #   {"schedules": [
 #      {"id": "at-news", "prompt": "...", "time": "09:00", "tz": "Europe/Vienna"},
-#      {"id": "check",   "prompt": "...", "every_minutes": 15}
+#      {"id": "check",   "prompt": "...", "every_minutes": 15},
+#      {"id": "standup", "prompt": "...", "every_minutes": 60,
+#       "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
 #   ]}
 # When an entry is due, pigeon sends its prompt to the room as a normal
 # message (same pipeline as a chat message, same pi session).
@@ -256,11 +258,68 @@ def _sched_kind_ok(entry):
         and every > 0
 
 
+# optional time window for interval schedules:
+#   {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}
+# (runs are skipped outside the window and snap to the next window start)
+
+def _window_parts(entry):
+    """(ZoneInfo, start_min, end_min) or None if no valid window."""
+    w = entry.get("window")
+    if not isinstance(w, dict):
+        return None
+    try:
+        sh, sm = (w.get("start") or "0:00").split(":")
+        eh, em = (w.get("end") or "0:00").split(":")
+        s_min = int(sh) * 60 + int(sm)
+        e_min = int(eh) * 60 + int(em)
+    except Exception:
+        return None
+    if s_min >= e_min:  # wrap-around windows are not supported
+        return None
+    try:
+        zone = ZoneInfo(w.get("tz") or "UTC")
+    except Exception:
+        return None
+    return zone, s_min, e_min
+
+
+def _window_minutes(entry, ts):
+    """Minutes since local midnight of ts in the window's zone, or None."""
+    parts = _window_parts(entry)
+    if parts is None:
+        return None
+    loc = datetime.fromtimestamp(ts, parts[0])
+    return loc.hour * 60 + loc.minute
+
+
+def _in_window(entry, ts):
+    parts = _window_parts(entry)
+    if parts is None:
+        return True
+    cur = _window_minutes(entry, ts)
+    return parts[1] <= cur < parts[2]
+
+
+def _next_window_start(entry, ts):
+    parts = _window_parts(entry)
+    if parts is None:
+        return ts
+    zone, s_min, _ = parts
+    loc = datetime.fromtimestamp(ts, zone)
+    cand = loc.replace(hour=s_min // 60, minute=s_min % 60,
+                       second=0, microsecond=0)
+    if loc.hour * 60 + loc.minute >= s_min:
+        cand += timedelta(days=1)
+    return cand.timestamp()
+
+
 def _initial_next_run(entry, now):
     if (entry.get("time") or "").strip():
         return _next_daily(entry, now)
     every = entry.get("every_minutes")
     if _sched_kind_ok(entry):
+        if not _in_window(entry, now):
+            return _next_window_start(entry, now)
         return now + every * 60
     return None
 
@@ -269,7 +328,10 @@ def _advance_next_run(entry, now):
     if (entry.get("time") or "").strip():
         return _next_daily(entry, now)
     if _sched_kind_ok(entry):
-        return now + entry["every_minutes"] * 60
+        nxt = now + entry["every_minutes"] * 60
+        if not _in_window(entry, nxt):
+            nxt = _next_window_start(entry, nxt)
+        return nxt
     return None
 
 

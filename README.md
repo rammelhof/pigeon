@@ -52,9 +52,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   into `$PI_CODING_AGENT_DIR/skills` (the `pi-home` volume) at every start
   — bundled ones are updated, your own are kept. The `scheduler` skill
   lets you tell the bot things like *"send me news for austria every day
-  at 09:00"*; it maintains a `schedules.json` per room that pigeon's
-  scheduler thread checks every `SCHEDULER_INTERVAL` seconds and fires as
-  normal room messages (daily `HH:MM` + IANA timezone, or every N minutes).
+  at 09:00"* or *"every hour between 10:00 and 22:00"*; it maintains a
+  `schedules.json` per room that pigeon's scheduler thread checks every
+  `SCHEDULER_INTERVAL` seconds and fires as normal room messages
+  (daily `HH:MM` + IANA timezone, or every N minutes, optionally confined
+  to a local time `window`).
 * **Fast shutdown**: on SIGTERM (`docker stop`) pigeon kills active pi
   runs and exits immediately — the container does not linger until the
   grace-period SIGKILL.
