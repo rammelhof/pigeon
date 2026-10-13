@@ -22,12 +22,21 @@ RUN apt-get update \
         # build
         build-essential cmake pkg-config \
         # net
-        httpie openssh-client axel \
+        httpie openssh-client axel netcat-openbsd dnsutils lsof \
         # databases
         sqlite3 libsqlite3-dev redis-tools \
+        # headers for pip builds (cryptography, psycopg2, ...)
+        libssl-dev zlib1g-dev libffi-dev libpq-dev \
+        # documents / PDF / OCR
+        poppler-utils ghostscript qpdf xmlstarlet \
+        tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
+        hunspell hunspell-en hunspell-de \
+        fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
         # office / media (headless)
         libreoffice-writer libreoffice-calc libreoffice-impress \
         imagemagick ffmpeg \
+        # programming helpers
+        gh \
     && rm -rf /var/lib/apt/lists/*
 
 # pi coding agent (CLI)
