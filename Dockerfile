@@ -24,7 +24,7 @@ RUN apt-get update \
         # net
         httpie openssh-client axel \
         # databases
-        sqlite3 libsqlite3-dev postgresql-client mysql-client redis-tools \
+        sqlite3 libsqlite3-dev redis-tools \
         # office / media (headless)
         libreoffice-writer libreoffice-calc libreoffice-impress \
         imagemagick ffmpeg \
