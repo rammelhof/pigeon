@@ -78,6 +78,11 @@ STATE_SCAN_EVERY = int(os.environ.get("STATE_SCAN_EVERY", "10"))
 # how often the scheduler checks schedules.json files (seconds)
 SCHEDULER_INTERVAL = float(os.environ.get("SCHEDULER_INTERVAL", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
+# Incoming-message batching: after a chat message, the room worker waits up
+# to this many seconds for more messages from the same room and sends the
+# whole burst to pi in a single run (0 = off, immediate). Scheduled
+# prompts are never delayed/batched.
+MESSAGE_BATCH_WINDOW = float(os.environ.get("MESSAGE_BATCH_WINDOW", "5"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # max size of file attachments downloaded into the room's chat/files/
 MAX_FILE_SIZE_MB = float(os.environ.get("MAX_FILE_SIZE_MB", "100"))
@@ -858,6 +863,7 @@ def run_job(key, bot, job):
         "status": "running",
         "retries": 0,
         "job_id": job["job_id"],
+        "job_ids": job.get("job_ids") or [job["job_id"]],
         "session_id": f"{bot}_{os.path.basename(job['cwd'])}",
         "created_at": time.time(),
         "started_at": time.time(),
@@ -911,7 +917,8 @@ def run_job(key, bot, job):
     finally:
         _clear_running(job["cwd"], task["id"])
         with _lock:
-            _active_jobs.discard(task["job_id"])
+            for jid in task.get("job_ids", [task["job_id"]]):
+                _active_jobs.discard(jid)
         with _lock:
             if task["status"] == "done":
                 _stats["completed"] += 1
@@ -922,22 +929,50 @@ def run_job(key, bot, job):
 
 def _room_worker(key, bot, q):
     while True:
-        job = q.get()
-        if job is None:
+        first = q.get()
+        if first is None:
             return
+        batch = [first]
+        stop = False
+        # batch window: collect more chat messages for this room, then run
+        # pi once for the whole burst
+        if first.get("batch") and MESSAGE_BATCH_WINDOW > 0:
+            while True:
+                try:
+                    nxt = q.get(timeout=MESSAGE_BATCH_WINDOW)
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    stop = True
+                    break
+                batch.append(nxt)
+        if len(batch) == 1:
+            job = batch[0]
+        else:
+            job = dict(batch[0])
+            job["job_ids"] = [e["job_id"] for e in batch]
+            job["message"] = "\n".join(
+                f"[{e.get('sender', 'user')}] {e.get('message', '')}"
+                for e in batch)
+            log.info("%s: %d messages within %.0fs window — one pi run",
+                     key, len(batch), MESSAGE_BATCH_WINDOW)
         try:
-            jid = job["job_id"]
+            for e in batch:
+                jid = e["job_id"]
 
-            def pop_job(s):
-                s["pending"] = [it for it in s["pending"]
-                                if it.get("job_id") != jid]
+                def pop_job(s, jid=jid):
+                    s["pending"] = [it for it in s["pending"]
+                                    if it.get("job_id") != jid]
 
-            _state_update(job["cwd"], pop_job)
+                _state_update(job["cwd"], pop_job)
             run_job(key, bot, job)
         except Exception as e:  # safety net, run_job already posts
             log.error("worker for %s crashed: %s", key, e)
         finally:
-            q.task_done()
+            for _ in batch:
+                q.task_done()
+        if stop:
+            return
 
 
 def enqueue(key, bot, job):
@@ -1138,6 +1173,7 @@ def webhook(bot):
         "message": message,
         "sender": sender,
         "cwd": cwd,
+        "batch": True,
     })
     log.info("queued message from %s in %s", sender, key)
     return jsonify({"queued": True, "bot": bot, "room_folder": folder}), 202

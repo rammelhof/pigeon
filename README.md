@@ -58,6 +58,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
     *Personal Information → Security* (do not use real account passwords)
   * the `/pw` message passes through the room's Talk history — delete it
     afterwards, or edit `.room.json` on the host for a no-trace setup
+* **Message batching**: a room worker waits up to `MESSAGE_BATCH_WINDOW`
+  seconds after a chat message for more messages from the same room and
+  sends the whole burst to pi in a single run (as one prompt with the
+  senders, so pi can answer at once); 0 disables the wait. Scheduled
+  prompts skip the window so they stay on time.
 * A **heartbeat thread** runs every `HEARTBEAT_INTERVAL` seconds and checks
   all started tasks:
   * pi process still alive past `PI_TIMEOUT` → killed; the worker reruns
@@ -176,6 +181,7 @@ All configuration is via environment variables (see `.env.example`):
 | `STATE_SCAN_EVERY` | `10` | Every Nth heartbeat also scans state files and re-queues stale jobs (crash self-healing) |
 | `SCHEDULER_INTERVAL` | `30` | Seconds between checks of room `schedules.json` files (scheduled tasks) |
 | `MAX_RETRIES` | `1` | Reruns a failed/timed-out task in the same room session |
+| `MESSAGE_BATCH_WINDOW` | `5` | Seconds to wait for more messages from the room before sending the burst to pi (0 = immediate) |
 | `MAX_FILE_SIZE_MB` | `100` | Max size of file attachments downloaded into `chat/files/` |
 | `BOTS_DIR` | `/bots` | Where per-bot room folders live |
 | `PI_CODING_AGENT_DIR` | `/pi-home/agent` | pi config dir (auth.json, models.json, sessions) |

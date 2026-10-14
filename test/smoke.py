@@ -45,6 +45,7 @@ os.environ.update({
     "SCHEDULER_INTERVAL": "1",
     "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
+    "MESSAGE_BATCH_WINDOW": "1",
     "LOG_LEVEL": "INFO",
     "PORT": "8088",
 })
@@ -408,10 +409,27 @@ t = wait_room_done("bot1/rooms/assibot", min_count=2, retries=1)
 check("failed run retried and done",
       bool(t) and t["status"] == "done" and t["retries"] == 1, str(t))
 
+# 7b. batch window: messages within the window go to pi in one run
+s, _ = signed_webhook("bot1", new_payload("batch one"))
+s, _ = signed_webhook("bot1", new_payload("batch two"))
+t = wait_room_done("bot1/rooms/assibot", min_count=3)
+check("batched messages processed", bool(t) and t["status"] == "done",
+      str(t))
+batched = [p for c, p in FakePopen._seen
+           if c.replace("\\", "/").endswith("bot1/rooms/assibot")
+           and "batch one" in p and "batch two" in p]
+check("burst sent to pi as one prompt with both messages",
+      len(batched) == 1, str([p[:60] for p in batched]))
+mine = [x for x in tasks()["tasks"]
+        if x["room_cwd"].replace("\\", "/").endswith("bot1/rooms/assibot")]
+check("burst produced exactly one task (not one per message)",
+      len(mine) == 3, str([(x["status"]) for x in mine]))
+
 # 8. hanging prompt (different bot) -> heartbeat kills -> retry -> done;
 #    a second message stays queued and is persisted in the state file
 s, _ = signed_webhook("bot2", new_payload("hang", room_token="h4ngtok1",
                                           room_name="Hang Room"))
+time.sleep(1.2)  # let the batch window pass so the hang runs alone
 s, _ = signed_webhook("bot2", new_payload("follow-up please",
                                           room_token="h4ngtok1",
                                           room_name="Hang Room"))

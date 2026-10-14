@@ -156,6 +156,7 @@ All in `.env` (compose reads it automatically):
 | behaviour | `SCHEDULER_INTERVAL` | seconds between checks of the rooms' `schedules.json` files (default 30) |
 | behaviour | `SKILLS_SRC` | dir in the image with bundled skills, copied to `$PI_CODING_AGENT_DIR/skills` at startup (default `/app/skills`) |
 | behaviour | `MAX_RETRIES` | how often a failed/timed-out task is rerun in the same room session |
+| batching | `MESSAGE_BATCH_WINDOW` | seconds to wait for more room messages before sending the burst to pi (0 = immediate) |
 | behaviour | `PORT` | HTTP port (published as `8080:8080`) |
 
 ## 6. Networking
