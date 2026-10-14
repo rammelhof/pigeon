@@ -304,10 +304,10 @@ check("sandbox: read-only tool belt (incl. /run for DNS) + writable "
 check("sandbox: merged-usr shims recreated (dynamic linker visible)",
       "--symlink" in last_cmd and "usr/lib64" in last_cmd
       and "/lib64" in last_cmd, str(last_cmd))
-check("sandbox: sensitive paths masked + clean env (no TALK_BOT_SECRET)",
-      "--tmpfs" in last_cmd and BOTS_TEST in last_cmd and "/app" in last_cmd
-      and "--clearenv" in last_cmd and "--setenv" in last_cmd
-      and "PATH" in last_cmd, str(last_cmd))
+check("sandbox: inherit NO env except PATH/HOME/LANG/PI_CODING_AGENT_DIR",
+      "--clearenv" in last_cmd and "--setenv" in last_cmd
+      and "PATH" in last_cmd and "PI_CODING_AGENT_DIR" in last_cmd
+      and PI_CFG in last_cmd and "/app" in last_cmd, str(last_cmd))
 check("sandbox: masks applied BEFORE the workspace bind (ws is under "
       "BOTS_DIR, a later tmpfs would hide it)",
       last_cmd.index(BOTS_TEST) < last_cmd.index("--bind"),

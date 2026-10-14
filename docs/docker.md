@@ -93,8 +93,9 @@ Every pi invocation is wrapped in [bubblewrap](https://github.com/containers/bub
   `HOME` points into the workspace (git config, npm cache stay in-room),
 * **masked paths + clean environment** — `/bots` (other rooms) and `/app`
   (pigeon code) are covered by empty private tmpfs mounts, and the
-  environment is cleared (only `PATH`, `HOME`, `LANG` are set), so
-  `TALK_BOT_SECRET` and co. never reach pi,
+  environment is cleared (only `PATH`, `HOME`, `LANG` and
+  `PI_CODING_AGENT_DIR` are set), so `TALK_BOT_SECRET` and co. never
+  reach pi,
 * **full network access** — no network namespace, the agent has the same
   internet access as the container (no per-room opt-out flag).
 

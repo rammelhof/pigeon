@@ -789,6 +789,8 @@ def pi_command(prompt, session_id, cwd):
                "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
                "--setenv", "HOME", ws,
                "--setenv", "LANG", "C.UTF-8",
+               # pi must still find auth.json/models.json/sessions
+               "--setenv", "PI_CODING_AGENT_DIR", PI_CONFIG_DIR,
                # fresh tmp/dev/proc (pid namespace: /proc shows pi only)
                "--tmpfs", "/tmp",
                "--dev", "/dev",
