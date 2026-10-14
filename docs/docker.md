@@ -84,12 +84,17 @@ pi runs in the room's `workspace/` subfolder (pigeon state files like
 Every pi invocation is wrapped in [bubblewrap](https://github.com/containers/bubblewrap):
 
 * **read-only root** — `/usr`, `/etc`, `/var`, `/run` (Docker DNS), `/sys`
-  are bind-mounted read-only; that is the entire tool belt, nothing else
-  exists inside the sandbox,
+  are bind-mounted read-only, plus the merged-usr symlinks (`/bin`, `/lib`,
+  `/lib64`, `/sbin`) recreated so the dynamic linker is found; that is the
+  entire tool belt, nothing else exists inside the sandbox,
 * **writable: only** the room's `workspace/` and `PI_CODING_AGENT_DIR`
   (sessions, skills, model credentials),
 * **fresh namespaces** — new PID/IPC/UTS namespaces, `--die-with-parent`,
   `HOME` points into the workspace (git config, npm cache stay in-room),
+* **masked paths + clean environment** — `/bots` (other rooms) and `/app`
+  (pigeon code) are covered by empty private tmpfs mounts, and the
+  environment is cleared (only `PATH`, `HOME`, `LANG` are set), so
+  `TALK_BOT_SECRET` and co. never reach pi,
 * **full network access** — no network namespace, the agent has the same
   internet access as the container (no per-room opt-out flag).
 

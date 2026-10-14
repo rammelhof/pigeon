@@ -757,29 +757,45 @@ def pi_command(prompt, session_id, cwd):
         if bwrap is None:
             raise RuntimeError("SANDBOX=1 but bwrap not found — install "
                                "bubblewrap or set SANDBOX=0")
+        # The sandbox root is a fresh tmpfs that only contains what is
+        # bound here — so in addition to the read-only tool belt, the
+        # merged-usr root symlinks must be recreated inside, or the
+        # dynamic linker (/lib64/...) is invisible and every exec fails.
         cmd = [bwrap,
-               # read-only root (tools, configs, fonts, ca-certificates;
-               # /run carries the container's DNS in /run/resolv.conf)
                "--ro-bind", "/usr", "/usr",
                "--ro-bind", "/etc", "/etc",
                "--ro-bind", "/var", "/var",
-               "--ro-bind", "/run", "/run",
+               "--ro-bind", "/run", "/run",      # Docker DNS: /run/resolv.conf
                "--ro-bind", "/sys", "/sys",
+               # merged-usr shims (in the container / these are symlinks)
+               "--symlink", "usr/lib64", "/lib64",
+               "--symlink", "usr/lib", "/lib",
+               "--symlink", "usr/bin", "/bin",
+               "--symlink", "usr/sbin", "/sbin",
                # writable: this room's workspace + the pi home (sessions,
-               # skills, credentials) — nothing else exists inside
+               # skills, model credentials)
                "--bind", ws, ws,
                "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
-               # fresh environment, new PID/IPC/UTS namespaces, FULL net
+               # mask sensitive paths (empty, private to this sandbox):
+               # other rooms incl. their .room.json, and pigeon's code
+               "--tmpfs", BOTS_DIR,
+               "--tmpfs", "/app",
+               # inherit NO environment (TALK_BOT_SECRET lives in
+               # gunicorn's) — set only what pi needs; HOME in the
+               # workspace keeps the room self-contained
+               "--clearenv",
+               "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+               "--setenv", "HOME", ws,
+               "--setenv", "LANG", "C.UTF-8",
+               # fresh tmp/dev/proc (pid namespace: /proc shows pi only)
                "--tmpfs", "/tmp",
                "--dev", "/dev",
                "--proc", "/proc",
+               # new PID/IPC/UTS namespaces, FULL network
                "--unshare-pid",
                "--unshare-ipc",
                "--unshare-uts",
                "--die-with-parent",
-               # HOME points into the workspace (git config, npm cache —
-               # the room stays self-contained, nothing leaks from /root)
-               "--setenv", "HOME", ws,
                "--chdir", ws] + cmd
     return cmd
 

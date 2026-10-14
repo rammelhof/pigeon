@@ -296,11 +296,18 @@ check("pi runs with the room workspace as working directory",
 check("pi runs under bubblewrap",
       os.path.basename(last_cmd[0]).startswith("bwrap"),
       str(last_cmd[:1]))
-check("sandbox: read-only root (incl. /run for DNS) + writable workspace "
-      "and pi home",
+check("sandbox: read-only tool belt (incl. /run for DNS) + writable "
+      "workspace and pi home",
       "--ro-bind" in last_cmd and "/usr" in last_cmd and "/run" in last_cmd
       and last_cmd.count("--bind") == 2
       and _assi_ws in last_cmd and PI_CFG in last_cmd, str(last_cmd))
+check("sandbox: merged-usr shims recreated (dynamic linker visible)",
+      "--symlink" in last_cmd and "usr/lib64" in last_cmd
+      and "/lib64" in last_cmd, str(last_cmd))
+check("sandbox: sensitive paths masked + clean env (no TALK_BOT_SECRET)",
+      "--tmpfs" in last_cmd and BOTS_TEST in last_cmd and "/app" in last_cmd
+      and "--clearenv" in last_cmd and "--setenv" in last_cmd
+      and "PATH" in last_cmd, str(last_cmd))
 check("sandbox: fresh pid/ipc/uts, full network, chdir into workspace",
       "--unshare-pid" in last_cmd and "--unshare-ipc" in last_cmd
       and "--unshare-uts" in last_cmd and "--unshare-net" not in last_cmd
