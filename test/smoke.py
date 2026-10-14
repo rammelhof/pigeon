@@ -211,6 +211,17 @@ def wait_room_done(cwd, timeout=25, min_count=1, retries=None):
     return None
 
 
+def wait_prompt(needle, cwd_suffix, timeout=8):
+    """Poll until a pi prompt containing needle was seen for cwd_suffix."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for c, p in FakePopen._seen:
+            if c.replace("\\", "/").endswith(cwd_suffix) and needle in p:
+                return p
+        time.sleep(0.1)
+    return None
+
+
 # 0. pi not configured -> webhook 503 + health degraded
 auth_file = os.path.join(PI_CFG, "auth.json")
 os.path.exists(auth_file) and os.remove(auth_file)
@@ -304,7 +315,7 @@ check("/pw status reply: configured",
       str(posted)[:200])
 
 # 4c. file message without app password -> pi is instructed (user language)
-directs_before = len(nc_stub.H.direct_calls)
+directs_before = len(nc_stub.H.search_calls)
 s, body = signed_webhook("bot1", file_payload("look at {file}",
                                               "norpwrm001", "No Pw Room"))
 check("file msg without password 202", s == 202, str(s))
@@ -317,10 +328,10 @@ prompted = [p for c, p in FakePopen._seen
 check("pi instructed about the missing app password (in user's language)",
       any("app password" in p and "/pw <nextcloud-user> <app-password>" in p
           for p in prompted), str(prompted)[:250])
-check("no dav direct call without credentials",
-      len(nc_stub.H.direct_calls) == directs_before
+check("no dav SEARCH without credentials",
+      len(nc_stub.H.search_calls) == directs_before
       and not os.path.isdir(os.path.join(np_cwd, "chat", "files")),
-      str(nc_stub.H.direct_calls))
+      str(nc_stub.H.search_calls))
 
 # 4d. file message with room credentials -> download by file id
 s, body = signed_webhook("bot1", file_payload("look at {file}",
@@ -332,9 +343,9 @@ saved = [f for f in (os.listdir(fd) if os.path.isdir(fd) else [])
 check("file downloaded by id into chat/files/",
       len(saved) == 1 and saved[0].endswith("starwars-r2-d2.webp"),
       str(saved))
-check("dav direct called with the room's credentials + file id",
-      nc_stub.H.direct_calls[-1] == ("ncuser", 65890),
-      str(nc_stub.H.direct_calls[-1:]))
+check("dav SEARCH called with the room's credentials + file id",
+      nc_stub.H.search_calls[-1] == ("ncuser", 65890),
+      str(nc_stub.H.search_calls[-1:]))
 if saved:
     check("downloaded content matches the share",
           open(os.path.join(fd, saved[0]), "rb").read()
@@ -342,11 +353,10 @@ if saved:
 t = wait_room_done("bot1/rooms/pw-room")
 check("file task done (with password)", bool(t) and t["status"] == "done",
       str(t))
-prompted = [p for c, p in FakePopen._seen
-            if c.replace("\\", "/").endswith("bot1/rooms/pw-room")]
 check("{file} replaced with hint to the local file (pi was prompted with it)",
-      any("chat/files/" in p and saved[0] in p for p in prompted),
-      str(prompted)[:250])
+      wait_prompt(saved[0], "bot1/rooms/pw-room") is not None,
+      str([p[:60] for c, p in FakePopen._seen
+           if c.replace("\\", "/").endswith("bot1/rooms/pw-room")])[:250])
 
 # 4e. wrong credentials -> failure hint + share link, task still runs
 signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
@@ -355,13 +365,11 @@ signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
 s, body = signed_webhook("bot1", file_payload("look at {file}",
                                               "pwroom0001", "Pw Room"))
 check("file msg with wrong password 202", s == 202, str(s))
-t = wait_room_done("bot1/rooms/pw-room")
+t = wait_room_done("bot1/rooms/pw-room", min_count=2)  # 4d + 4e tasks
 check("failed-download task done", bool(t) and t["status"] == "done", str(t))
-prompted = [p for c, p in FakePopen._seen
-            if c.replace("\\", "/").endswith("bot1/rooms/pw-room")]
+prompt = wait_prompt("download failed (dav search", "bot1/rooms/pw-room")
 check("wrong password -> failure hint with share link (pi was prompted)",
-      any("download failed" in p and "virtual-link" in p for p in prompted),
-      str(prompted)[:250])
+      prompt is not None and "virtual-link" in prompt, str(prompt))
 
 # 5. non-message event (reaction) ignored
 payload = new_payload("like")

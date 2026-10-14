@@ -144,9 +144,10 @@ def post_message(room, message):
 # --------------------------------------------- file attachments ----------
 # Talk sends files as a {file} rich-object placeholder. The "link" in the
 # parameter is a Talk virtual link (not downloadable), but the file id is a
-# real file id: pigeon asks the OCS dav API for a short-lived direct URL
-# (POST /ocs/v2.php/apps/dav/api/v1/direct, Basic auth with the room's
-# app password) and downloads from it into the room's chat/files/.
+# real file id: pigeon resolves it to a WebDAV path via SEARCH
+# (basicsearch on oc:fileid) and downloads it with plain GET + Basic auth
+# (the room's app password) into the room's chat/files/ folder — no
+# direct API, no temp share, no folder iteration.
 # Without a room app password, pi is instructed to tell the user (in the
 # user's language) that the password for file access is missing.
 
@@ -178,24 +179,36 @@ def _room_file_creds(cwd):
     return None
 
 
-def _direct_download_url(user, pw, file_id):
-    """Short-lived direct download URL for a file id (OCS dav API)."""
-    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/dav/api/v1/direct"
-    r = requests.post(url, auth=(user, pw), json={"fileId": file_id},
-                      headers={"OCS-APIRequest": "true",
-                               "Accept": "application/json"}, timeout=30)
-    if r.status_code >= 400:
-        raise RuntimeError(f"direct link: HTTP {r.status_code}")
-    ocs = (r.json() or {}).get("ocs", {})
-    if ocs.get("meta", {}).get("statuscode") != 200:
-        raise RuntimeError(f"direct link: {ocs.get('meta', {}).get('message', 'unknown error')}")
-    dl = (ocs.get("data") or {}).get("url", "")
-    if not dl.startswith("http"):
-        dl = NEXTCLOUD_URL + dl
-    return dl
+def _dav_file_url(user, pw, file_id):
+    """WebDAV SEARCH (basicsearch on oc:fileid) -> absolute download URL.
+    Single request, no temp share, no folder iteration."""
+    uid = str(user).split("@", 1)[0]
+    file_id = int(file_id)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<d:searchrequest xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">'
+        "<d:basicsearch><d:select><d:prop><d:displayname/><oc:fileid/>"
+        "</d:prop></d:select><d:from><d:scope><d:href>/files/"
+        + uid + "</d:href><d:depth>infinity</d:depth></d:scope></d:from>"
+        "<d:where><d:eq><d:prop><oc:fileid/></d:prop>"
+        f"<d:literal>{file_id}</d:literal></d:eq></d:where><d:orderby/>"
+        "</d:basicsearch></d:searchrequest>")
+    r = requests.request("SEARCH", f"{NEXTCLOUD_URL}/remote.php/dav",
+                         auth=(user, pw), data=xml.encode(),
+                         headers={"Content-Type": "application/xml",
+                                  "Depth": "0"}, timeout=30)
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"dav search: HTTP {r.status_code}")
+    m = re.search(r"<d:href>([^<]+)</d:href>", r.text)
+    if not m:
+        raise RuntimeError(f"file id {file_id} not found")
+    href = m.group(1)
+    if not href.startswith("/"):
+        href = "/" + href
+    return NEXTCLOUD_URL + href
 
 
-def _save_download(dl_url, name, dest_dir):
+def _save_download(dl_url, name, dest_dir, auth=None):
     """Stream dl_url into dest_dir/<ts>-<name>. Returns (basename, bytes)."""
     name = re.sub(r"[^A-Za-z0-9._-]+", "_",
                   os.path.basename(name or "file")).strip("._") or "file"
@@ -208,11 +221,11 @@ def _save_download(dl_url, name, dest_dir):
         base, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
         dest = os.path.join(dest_dir, f"{stamp}-{base}_{i}{ext}")
         i += 1
-    url = dl_url  # direct URL serves the file itself, no query needed
     cap = int(MAX_FILE_SIZE_MB * 1024 * 1024)
     size, tmp = 0, dest + ".part"
     try:
-        with requests.get(url, stream=True, timeout=(10, 600)) as r:
+        with requests.get(dl_url, auth=auth, stream=True,
+                          timeout=(10, 600)) as r:
             if r.status_code >= 400:
                 raise RuntimeError(f"download: HTTP {r.status_code}")
             with open(tmp, "wb") as f:
@@ -256,9 +269,10 @@ def _replace_file_placeholder(message, f, cwd):
         return (f"[file: {name} ({mime})] — download failed (no file id)"
                 + (f"; share link: {link}" if link else ""))
     try:
-        dl = _direct_download_url(*creds, file_id)
-        saved, size = _save_download(
-            dl, name, os.path.join(cwd, "chat", "files"))
+        dl = _dav_file_url(*creds, file_id)
+        saved, size = _save_download(dl, name, os.path.join(cwd, "chat",
+                                                            "files"),
+                                     auth=creds)
         log.info("downloaded file %s -> chat/files/%s (%s)",
                  name, saved, _fmt_size(size))
         return (f"[file: {name} ({mime}, {_fmt_size(size)})] — downloaded "

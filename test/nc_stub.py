@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """Fake Nextcloud for local testing: accepts spreed bot API messages
-and verifies outgoing bot API signatures; serves the OCS dav direct API
-(file id -> short-lived download URL) like a real NC34 instance.
+and verifies outgoing bot API signatures; serves WebDAV SEARCH
+(oc:fileid -> href) + authenticated file GETs like a real NC34 instance.
 Run standalone or from smoke.py."""
 import base64
 import hashlib
 import hmac
 import json
-import os
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 class H(BaseHTTPRequestHandler):
     # every bot API message received (room token, message) — for tests
     received = []
-    # Basic auth for the dav direct API: {user: password}
+    # Basic auth for WebDAV: {user: password}
     share_auth = {}
-    # issued direct download tokens -> body bytes
-    direct_tokens = {}
-    # every dav direct request seen: (authed_user or None, fileId)
-    direct_calls = []
+    # every dav SEARCH seen: (authed_user or None, fileid)
+    search_calls = []
+    # WebDAV path of the searched file (what SEARCH resolves to)
+    dav_href = "/remote.php/dav/files/ncuser/Talk/demo/file.webp"
     file_bytes = b"FAKE-IMAGE-BYTES-1234"
 
     def _json(self, obj, code=200):
@@ -45,12 +45,13 @@ class H(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self):
-        if self.path.startswith("/direct/"):
-            token = self.path.rsplit("/", 1)[-1]
-            body = H.direct_tokens.get(token)
-            if body is None:
-                self._json({"error": "not found"}, code=404)
+        if self.path.startswith("/remote.php/dav/files/"):
+            auth = self._basic_auth()
+            ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
+            if not ok:
+                self._json({"error": "unauthorized"}, code=401)
                 return
+            body = H.file_bytes
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
@@ -59,30 +60,33 @@ class H(BaseHTTPRequestHandler):
             return
         self._json({"ok": True})
 
+    def do_SEARCH(self):
+        body = self._body()
+        m = re.search(r"<d:literal>(\d+)</d:literal>", body)
+        file_id = int(m.group(1)) if m else None
+        auth = self._basic_auth()
+        ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
+        H.search_calls.append((auth[0] if auth else None, file_id))
+        if not ok:
+            self._json({"error": "unauthorized"}, code=401)
+            return
+        xml = ('<?xml version="1.0"?>'
+               '<d:multistatus xmlns:d="DAV:" '
+               'xmlns:oc="http://owncloud.org/ns"><d:response>'
+               f"<d:href>{H.dav_href}</d:href>"
+               "<d:propstat><d:prop><d:displayname>file.webp</d:displayname>"
+               f"<oc:fileid>{file_id}</oc:fileid></d:prop>"
+               "<d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
+               "</d:response></d:multistatus>")
+        raw = xml.encode()
+        self.send_response(207)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_POST(self):
         body = self._body()
-        if "/ocs/v2.php/apps/dav/api/v1/direct" in self.path:
-            auth = self._basic_auth()
-            try:
-                file_id = json.loads(body).get("fileId")
-            except json.JSONDecodeError:
-                file_id = None
-            ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
-            H.direct_calls.append((auth[0] if auth else None, file_id))
-            if not ok:
-                self._json({"ocs": {"meta": {"status": "failure",
-                                             "statuscode": 401,
-                                             "message": "Unauthorized"}}},
-                           code=401)
-                return
-            token = os.urandom(16).hex()
-            H.direct_tokens[token] = H.file_bytes
-            self._json({"ocs": {"meta": {"status": "ok", "statuscode": 200,
-                                         "message": "OK"},
-                                "data": {"url":
-                                         "http://127.0.0.1:8099/direct/"
-                                         + token}}})
-            return
         if "/ocs/v2.php/apps/spreed/api/v1/bot/" in self.path \
                 and self.path.endswith("/message"):
             if getattr(H, "secret", None):

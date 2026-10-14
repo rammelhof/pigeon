@@ -173,12 +173,12 @@ All in `.env` (compose reads it automatically):
   on untrusted networks.
 * **File attachments & per-room app passwords**: Talk file messages carry
   a `{file}` rich-object placeholder. Its `link` is a Talk *virtual* link
-  (it 404s), but its `id` is a real file id, so pigeon downloads via the
-  OCS dav API: `POST /ocs/v2.php/apps/dav/api/v1/direct` with
-  `{"fileId": <id>}` and HTTP Basic auth (room user + **app password**)
-  returns a short-lived `…/remote.php/direct/…` URL which is then fetched
-  (unauthenticated) into the room's `chat/files/` folder. No folder
-  iteration, no share creation. Each room keeps its own credentials in
+  (it 404s), but its `id` is a real file id, so pigeon resolves it with a
+  single WebDAV SEARCH (`basicsearch` on `oc:fileid`, Basic auth with the
+  room's **app password**) which returns the file's dav `href`, then a
+  plain authenticated GET streams it into the room's `chat/files/`
+  folder — no direct API, no temp share, no folder iteration. Each room
+  keeps its own credentials in
   its `.room.json` (`{"token": …, "nextcloud_user": …,
   "nextcloud_password": …}`, mode 600) — rooms do not share information
   or accounts. Set it by sending `/pw <user> <app-password>` in the room

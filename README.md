@@ -35,11 +35,10 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `OCS-APIRequest: true`, signed with the same secret — see the
   [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
 * **File attachments** (per-room, isolated): Talk sends files as a
-  `{file}` placeholder; the "link" inside it is a Talk virtual link, so
-  pigeon downloads by **file id** instead: `POST
-  /ocs/v2.php/apps/dav/api/v1/direct` (Basic auth with the room's app
-  password) → short-lived direct URL → saved into the room's
-  `chat/files/` folder, and the placeholder is replaced with a hint that
+  `{file}` placeholder; pigeon downloads by **file id** instead via
+  WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's
+  app password) which resolves the dav path, then a plain authenticated
+  GET saves the file, and the placeholder is replaced with a hint that
   points pi at the local file. Each room stores its own Nextcloud
   **app password** (user + password in the room's `.room.json`, never
   shared with other rooms):
