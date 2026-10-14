@@ -8,11 +8,13 @@ services:
     container_name: pigeon
     restart: unless-stopped
     # bubblewrap sandbox: Docker's default seccomp profile blocks the
-    # unshare syscall and the container lacks CAP_SYS_ADMIN for
-    # CLONE_NEWNS — without both, the sandbox cannot start (pigeon then
-    # falls back to unsandboxed pi automatically)
+    # unshare syscall, the container lacks CAP_SYS_ADMIN for
+    # CLONE_NEWNS, and the AppArmor docker-default profile refuses the
+    # mount-propagation change bwrap needs — without all three, the
+    # sandbox cannot start (pigeon then fails the run, no fallback)
     security_opt:
       - seccomp=unconfined
+      - apparmor=unconfined
     cap_add:
       - SYS_ADMIN
     ports:
