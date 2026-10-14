@@ -34,6 +34,26 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
   `OCS-APIRequest: true`, signed with the same secret — see the
   [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
+* **File attachments** (per-room, isolated): Talk sends files as a
+  `{file}` placeholder; the "link" inside it is a Talk virtual link, so
+  pigeon downloads by **file id** instead: `POST
+  /ocs/v2.php/apps/dav/api/v1/direct` (Basic auth with the room's app
+  password) → short-lived direct URL → saved into the room's
+  `chat/files/` folder, and the placeholder is replaced with a hint that
+  points pi at the local file. Each room stores its own Nextcloud
+  **app password** (user + password in the room's `.room.json`, never
+  shared with other rooms):
+  * in a room, send `/pw <nextcloud-user> <app-password>` to configure
+    it (intercepted by pigeon, never reaches pi); `/pw` shows the status
+    (the password is never echoed back)
+  * while a room has no app password, a file message does not download
+    anything — pigeon instead instructs the bot to tell the user **in
+    the user's language** that the password for file access is missing
+    and how to set it
+  * app passwords: create one per room-user in Nextcloud under
+    *Personal Information → Security* (do not use real account passwords)
+  * the `/pw` message passes through the room's Talk history — delete it
+    afterwards, or edit `.room.json` on the host for a no-trace setup
 * A **heartbeat thread** runs every `HEARTBEAT_INTERVAL` seconds and checks
   all started tasks:
   * pi process still alive past `PI_TIMEOUT` → killed; the worker reruns
@@ -152,6 +172,7 @@ All configuration is via environment variables (see `.env.example`):
 | `STATE_SCAN_EVERY` | `10` | Every Nth heartbeat also scans state files and re-queues stale jobs (crash self-healing) |
 | `SCHEDULER_INTERVAL` | `30` | Seconds between checks of room `schedules.json` files (scheduled tasks) |
 | `MAX_RETRIES` | `1` | Reruns a failed/timed-out task in the same room session |
+| `MAX_FILE_SIZE_MB` | `100` | Max size of file attachments downloaded into `chat/files/` |
 | `BOTS_DIR` | `/bots` | Where per-bot room folders live |
 | `PI_CODING_AGENT_DIR` | `/pi-home/agent` | pi config dir (auth.json, models.json, sessions) |
 | `PORT` | `8080` | HTTP port |

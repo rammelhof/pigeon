@@ -254,6 +254,115 @@ check("task done", bool(t) and t["status"] == "done", str(t))
 check("bots dir structure",
       os.path.isdir(os.path.join(BOTS_TEST, "bot1", "rooms", "assibot")))
 
+# 4b. /pw room command (per-room app password for file downloads)
+nc_stub.H.share_auth = {"ncuser": "ncpw123"}
+
+
+def file_payload(message, room_token, room_name,
+                 file_id=65890, name="starwars-r2-d2.webp"):
+    p = new_payload(message, room_token=room_token, room_name=room_name)
+    p["object"]["content"] = json.dumps({"message": message,
+        "parameters": {"file": {"type": "file", "id": str(file_id),
+                                "name": name, "size": "9616",
+                                "link": "https://nc.test/s/virtual-link",
+                                "mimetype": "image/webp"}}})
+    return p
+
+
+s, body = signed_webhook("bot1", new_payload("/pw",
+                                             room_token="pwroom0001",
+                                             room_name="Pw Room"))
+check("/pw status: handled, not queued",
+      s == 200 and body.get("handled") == "/pw", str(body))
+pw_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "pw-room")
+check("/pw does not create a task/state file",
+      not os.path.exists(os.path.join(pw_cwd, ".pigeon.json")))
+posted = [m for room, m in nc_stub.H.received if room == "pwroom0001"]
+check("/pw status reply: not configured",
+      any("not configured" in m for m in posted), str(posted)[:200])
+
+s, body = signed_webhook("bot1",
+                         new_payload("/pw ncuser ncpw123",
+                                     room_token="pwroom0001",
+                                     room_name="Pw Room"))
+check("/pw set: handled", s == 200 and body.get("handled") == "/pw",
+      str(body))
+meta = json.load(open(os.path.join(pw_cwd, ".room.json")))
+check("/pw credentials stored per room (token kept)",
+      meta.get("nextcloud_user") == "ncuser"
+      and meta.get("nextcloud_password") == "ncpw123"
+      and meta.get("token") == "pwroom0001", str(meta))
+posted = [m for room, m in nc_stub.H.received if room == "pwroom0001"]
+check("/pw set reply posted without echoing the password",
+      any("saved" in m and "ncpw123" not in m for m in posted),
+      str(posted)[:200])
+signed_webhook("bot1", new_payload("/pw", room_token="pwroom0001",
+                                   room_name="Pw Room"))
+posted = [m for room, m in nc_stub.H.received if room == "pwroom0001"]
+check("/pw status reply: configured",
+      any("configured for user: ncuser" in m for m in posted),
+      str(posted)[:200])
+
+# 4c. file message without app password -> pi is instructed (user language)
+directs_before = len(nc_stub.H.direct_calls)
+s, body = signed_webhook("bot1", file_payload("look at {file}",
+                                              "norpwrm001", "No Pw Room"))
+check("file msg without password 202", s == 202, str(s))
+np_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "no-pw-room")
+t = wait_room_done("bot1/rooms/no-pw-room")
+check("no-password file task done", bool(t) and t["status"] == "done",
+      str(t))
+prompted = [p for c, p in FakePopen._seen
+            if c.replace("\\", "/").endswith("bot1/rooms/no-pw-room")]
+check("pi instructed about the missing app password (in user's language)",
+      any("app password" in p and "/pw <nextcloud-user> <app-password>" in p
+          for p in prompted), str(prompted)[:250])
+check("no dav direct call without credentials",
+      len(nc_stub.H.direct_calls) == directs_before
+      and not os.path.isdir(os.path.join(np_cwd, "chat", "files")),
+      str(nc_stub.H.direct_calls))
+
+# 4d. file message with room credentials -> download by file id
+s, body = signed_webhook("bot1", file_payload("look at {file}",
+                                              "pwroom0001", "Pw Room"))
+check("file msg with password 202", s == 202, str(s))
+fd = os.path.join(pw_cwd, "chat", "files")
+saved = [f for f in (os.listdir(fd) if os.path.isdir(fd) else [])
+         if f.endswith(".webp")]
+check("file downloaded by id into chat/files/",
+      len(saved) == 1 and saved[0].endswith("starwars-r2-d2.webp"),
+      str(saved))
+check("dav direct called with the room's credentials + file id",
+      nc_stub.H.direct_calls[-1] == ("ncuser", 65890),
+      str(nc_stub.H.direct_calls[-1:]))
+if saved:
+    check("downloaded content matches the share",
+          open(os.path.join(fd, saved[0]), "rb").read()
+          == nc_stub.H.file_bytes)
+t = wait_room_done("bot1/rooms/pw-room")
+check("file task done (with password)", bool(t) and t["status"] == "done",
+      str(t))
+prompted = [p for c, p in FakePopen._seen
+            if c.replace("\\", "/").endswith("bot1/rooms/pw-room")]
+check("{file} replaced with hint to the local file (pi was prompted with it)",
+      any("chat/files/" in p and saved[0] in p for p in prompted),
+      str(prompted)[:250])
+
+# 4e. wrong credentials -> failure hint + share link, task still runs
+signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
+                                   room_token="pwroom0001",
+                                   room_name="Pw Room"))
+s, body = signed_webhook("bot1", file_payload("look at {file}",
+                                              "pwroom0001", "Pw Room"))
+check("file msg with wrong password 202", s == 202, str(s))
+t = wait_room_done("bot1/rooms/pw-room")
+check("failed-download task done", bool(t) and t["status"] == "done", str(t))
+prompted = [p for c, p in FakePopen._seen
+            if c.replace("\\", "/").endswith("bot1/rooms/pw-room")]
+check("wrong password -> failure hint with share link (pi was prompted)",
+      any("download failed" in p and "virtual-link" in p for p in prompted),
+      str(prompted)[:250])
+
 # 5. non-message event (reaction) ignored
 payload = new_payload("like")
 payload["object"]["name"] = "reaction"

@@ -79,6 +79,8 @@ STATE_SCAN_EVERY = int(os.environ.get("STATE_SCAN_EVERY", "10"))
 SCHEDULER_INTERVAL = float(os.environ.get("SCHEDULER_INTERVAL", "30"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# max size of file attachments downloaded into the room's chat/files/
+MAX_FILE_SIZE_MB = float(os.environ.get("MAX_FILE_SIZE_MB", "100"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -137,6 +139,164 @@ def post_message(room, message):
                       headers=headers, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")
+
+
+# --------------------------------------------- file attachments ----------
+# Talk sends files as a {file} rich-object placeholder. The "link" in the
+# parameter is a Talk virtual link (not downloadable), but the file id is a
+# real file id: pigeon asks the OCS dav API for a short-lived direct URL
+# (POST /ocs/v2.php/apps/dav/api/v1/direct, Basic auth with the room's
+# app password) and downloads from it into the room's chat/files/.
+# Without a room app password, pi is instructed to tell the user (in the
+# user's language) that the password for file access is missing.
+
+def _fmt_size(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def _payload_file_param(payload):
+    """The file rich-object parameter of a webhook payload, or None."""
+    try:
+        content = json.loads(
+            (payload.get("object") or {}).get("content") or "{}")
+        f = (content.get("parameters") or {}).get("file")
+        return f if isinstance(f, dict) else None
+    except Exception:
+        return None
+
+
+def _room_file_creds(cwd):
+    """(user, password) for this room from .room.json, or None."""
+    meta = _room_meta_read(cwd)
+    user, pw = meta.get("nextcloud_user"), meta.get("nextcloud_password")
+    if user and pw:
+        return user, pw
+    return None
+
+
+def _direct_download_url(user, pw, file_id):
+    """Short-lived direct download URL for a file id (OCS dav API)."""
+    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/dav/api/v1/direct"
+    r = requests.post(url, auth=(user, pw), json={"fileId": file_id},
+                      headers={"OCS-APIRequest": "true",
+                               "Accept": "application/json"}, timeout=30)
+    if r.status_code >= 400:
+        raise RuntimeError(f"direct link: HTTP {r.status_code}")
+    ocs = (r.json() or {}).get("ocs", {})
+    if ocs.get("meta", {}).get("statuscode") != 200:
+        raise RuntimeError(f"direct link: {ocs.get('meta', {}).get('message', 'unknown error')}")
+    dl = (ocs.get("data") or {}).get("url", "")
+    if not dl.startswith("http"):
+        dl = NEXTCLOUD_URL + dl
+    return dl
+
+
+def _save_download(dl_url, name, dest_dir):
+    """Stream dl_url into dest_dir/<ts>-<name>. Returns (basename, bytes)."""
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_",
+                  os.path.basename(name or "file")).strip("._") or "file"
+    name = name[:100]
+    os.makedirs(dest_dir, exist_ok=True)
+    stamp = int(time.time())
+    dest = os.path.join(dest_dir, f"{stamp}-{name}")
+    i, dot = 1, name.rfind(".")
+    while os.path.exists(dest):
+        base, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
+        dest = os.path.join(dest_dir, f"{stamp}-{base}_{i}{ext}")
+        i += 1
+    url = dl_url  # direct URL serves the file itself, no query needed
+    cap = int(MAX_FILE_SIZE_MB * 1024 * 1024)
+    size, tmp = 0, dest + ".part"
+    try:
+        with requests.get(url, stream=True, timeout=(10, 600)) as r:
+            if r.status_code >= 400:
+                raise RuntimeError(f"download: HTTP {r.status_code}")
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(1 << 16):
+                    size += len(chunk)
+                    if size > cap:
+                        raise RuntimeError(
+                            f"file exceeds {MAX_FILE_SIZE_MB:.0f} MB cap")
+                    f.write(chunk)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    os.replace(tmp, dest)
+    return os.path.basename(dest), size
+
+
+def _replace_file_placeholder(message, f, cwd):
+    """Replace {file} with a local-file hint (download ok), a failure hint,
+    or an instruction for pi to tell the user the app password is missing."""
+    name = f.get("name") or "file"
+    mime = f.get("mimetype") or "unknown type"
+    link = f.get("link") or ""
+    creds = _room_file_creds(cwd)
+    if creds is None:
+        log.info("file %s: no app password configured for this room — "
+                 "instructing pi", name)
+        return ("The user just sent a file ("
+                f"{name}, {mime}"
+                + (f"; share: {link}" if link else "")
+                + "), but this room has no app password configured, so the "
+                "server could not download it. Reply to the user — in the "
+                "same language they are using — that the app password for "
+                "file access is missing, and tell them to enable it by "
+                "sending: /pw <nextcloud-user> <app-password>")
+    try:
+        file_id = int(f.get("id"))
+    except (TypeError, ValueError):
+        file_id = None
+    if file_id is None:
+        return (f"[file: {name} ({mime})] — download failed (no file id)"
+                + (f"; share link: {link}" if link else ""))
+    try:
+        dl = _direct_download_url(*creds, file_id)
+        saved, size = _save_download(
+            dl, name, os.path.join(cwd, "chat", "files"))
+        log.info("downloaded file %s -> chat/files/%s (%s)",
+                 name, saved, _fmt_size(size))
+        return (f"[file: {name} ({mime}, {_fmt_size(size)})] — downloaded "
+                f"to chat/files/{saved} in the working directory")
+    except Exception as e:
+        log.warning("file download failed: %s", e)
+        return (f"[file: {name} ({mime})] — download failed ({e})"
+                + (f"; share link: {link}" if link else ""))
+
+
+# ---------------------------------------------------- /pw room command ----
+# Stored per room (isolation between rooms); the command never reaches pi.
+
+PW_SET_RE = re.compile(r"^/pw\s+(\S+)\s+(\S+)\s*$")
+PW_STATUS_RE = re.compile(r"^/pw\s*$")
+
+
+def _handle_pw_command(message, cwd, room):
+    """Handle /pw for this room. Returns the reply to post, or None when
+    the message is not a /pw command."""
+    m = PW_SET_RE.match(message)
+    if m:
+        meta = _room_meta_read(cwd)
+        meta["nextcloud_user"], meta["nextcloud_password"] = m.group(1), \
+            m.group(2)
+        _room_meta_write(cwd, meta)
+        log.info("room %s: app password stored for user %s",
+                 os.path.basename(cwd), m.group(1))
+        return ("App password saved for file access in this room "
+                f"(user: {m.group(1)}).")
+    if PW_STATUS_RE.match(message):
+        user = _room_file_creds(cwd)
+        if user:
+            return f"File access is configured for user: {user[0]}."
+        return ("File access is not configured for this room. Send "
+                "/pw <nextcloud-user> <app-password> to enable file "
+                "downloads.")
+    return None
 
 
 def folder_for_room(room_id, room_name):
@@ -226,12 +386,39 @@ def _room_token(cwd):
         return None
 
 
-def _write_room_token(cwd, token):
-    path = os.path.join(cwd, ".room.json")
+# ------------------------------------------------- room metadata ----------
+# .room.json holds the room token (written on every webhook, needed for
+# scheduled tasks) and the optional per-room Nextcloud app password
+# (used to download file attachments; never leaves this room).
+
+def _room_meta_path(cwd):
+    return os.path.join(cwd, ".room.json")
+
+
+def _room_meta_read(cwd):
+    try:
+        with open(_room_meta_path(cwd)) as f:
+            meta = json.load(f)
+        return meta if isinstance(meta, dict) else {}
+    except Exception:
+        return {}
+
+
+def _room_meta_write(cwd, meta):
+    path = _room_meta_path(cwd)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"token": token}, f)
+        json.dump(meta, f)
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+
+
+def _write_room_token(cwd, token):
+    meta = _room_meta_read(cwd)
+    if meta.get("token") == str(token):
+        return
+    meta["token"] = str(token)
+    _room_meta_write(cwd, meta)
 
 
 def _next_daily(entry, now):
@@ -893,6 +1080,17 @@ def webhook(bot):
     if not message:
         return jsonify({"ignored": "empty message"}), 200
 
+    folder = folder_for_room(room, room_name)
+    cwd = os.path.join(BOTS_DIR, bot, "rooms", folder)
+    os.makedirs(cwd, exist_ok=True)
+    _write_room_token(cwd, room)  # needed for scheduled tasks to reply
+
+    # room command: app password for file access (never reaches pi)
+    reply = _handle_pw_command(message, cwd, room)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "/pw"}), 200
+
     configured, config_file = pi_config_status()
     if not configured:
         log.error("pi is not configured (no %s in %s)",
@@ -901,10 +1099,13 @@ def webhook(bot):
                                  "container once and /login, or add a "
                                  f"models.json to {config_file}"}), 503
 
-    folder = folder_for_room(room, room_name)
-    cwd = os.path.join(BOTS_DIR, bot, "rooms", folder)
-    os.makedirs(cwd, exist_ok=True)
-    _write_room_token(cwd, room)  # needed for scheduled tasks to reply
+    # file attachment: download via the room's app password (OCS dav
+    # direct link) — or instruct pi that the password is missing
+    if "{file}" in message:
+        f = _payload_file_param(payload)
+        message = (_replace_file_placeholder(message, f, cwd) if f
+                   else message.replace("{file}",
+                                        "[file: no file data in payload]"))
 
     key = f"{bot}/{folder}"
     enqueue(key, bot, {

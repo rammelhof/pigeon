@@ -171,6 +171,27 @@ All in `.env` (compose reads it automatically):
   `X-Nextcloud-Talk-Random` / `X-Nextcloud-Talk-Signature`), so the body
   itself does not contain the secret — still, keep the endpoint behind TLS
   on untrusted networks.
+* **File attachments & per-room app passwords**: Talk file messages carry
+  a `{file}` rich-object placeholder. Its `link` is a Talk *virtual* link
+  (it 404s), but its `id` is a real file id, so pigeon downloads via the
+  OCS dav API: `POST /ocs/v2.php/apps/dav/api/v1/direct` with
+  `{"fileId": <id>}` and HTTP Basic auth (room user + **app password**)
+  returns a short-lived `…/remote.php/direct/…` URL which is then fetched
+  (unauthenticated) into the room's `chat/files/` folder. No folder
+  iteration, no share creation. Each room keeps its own credentials in
+  its `.room.json` (`{"token": …, "nextcloud_user": …,
+  "nextcloud_password": …}`, mode 600) — rooms do not share information
+  or accounts. Set it by sending `/pw <user> <app-password>` in the room
+  (`/pw` alone shows the status); pigeon intercepts the command, stores
+  it per room and never lets it reach pi. While a room has no app
+  password, a file message triggers a task where the bot is instructed to
+  tell the user — in the user's own language — that the password for
+  file access is missing and how to set it. Downloads are capped at
+  `MAX_FILE_SIZE_MB`; failures become a hint with the share link so the
+  bot can still react. Use *app passwords* (Personal Information →
+  Security), one per room if you want different permissions; the `/pw`
+  chat message stays in the room history — delete it afterwards or edit
+  `.room.json` on the host instead.
 
 ## 7. Heartbeat & task monitoring
 
