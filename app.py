@@ -19,8 +19,10 @@ Behaviour:
     in <room dir>/.pigeon.json, so pending and interrupted (running)
     jobs survive container restarts and are re-queued at startup.
   * Each Talk room gets its own folder under BOTS_DIR/<bot>/rooms/, named
-    after the room. Pi runs with that folder as working directory, so pi's
-    per-directory sessions keep per-room conversation context.
+    after the room. Pi runs in the room's workspace/ subfolder (inside a
+    bubblewrap sandbox: read-only root, only the workspace and the pi
+    home are writable) with full network access, so pi's per-directory
+    sessions keep per-room conversation context.
   * Pi must be configured with its default config files (auth.json /
     models.json in PI_CODING_AGENT_DIR). When not configured, the webhook
     answers 503 and /health reports the error.
@@ -83,8 +85,15 @@ MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 # whole burst to pi in a single run (0 = off, immediate). Scheduled
 # prompts are never delayed/batched.
 MESSAGE_BATCH_WINDOW = float(os.environ.get("MESSAGE_BATCH_WINDOW", "5"))
+# Run every pi invocation in a bubblewrap sandbox: read-only root, only
+# the room's workspace/ and PI_CODING_AGENT_DIR writable, fresh PID/IPC/
+# UTS namespaces, full network access (0 = off). Needs the bubblewrap
+# package; without it pi runs unsandboxed (with a warning).
+SANDBOX = os.environ.get("SANDBOX", "1") == "1"
+_sandbox_warned = False
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-# max size of file attachments downloaded into the room's chat/files/
+# max size in MB of file attachments downloaded into the room's
+# workspace/chat/files/
 MAX_FILE_SIZE_MB = float(os.environ.get("MAX_FILE_SIZE_MB", "100"))
 
 logging.basicConfig(
@@ -151,7 +160,7 @@ def post_message(room, message):
 # parameter is a Talk virtual link (not downloadable), but the file id is a
 # real file id: pigeon resolves it to a WebDAV path via SEARCH
 # (basicsearch on oc:fileid) and downloads it with plain GET + Basic auth
-# (the room's app password) into the room's chat/files/ folder — no
+# (the room's app password) into the room's workspace/chat/files/ folder — no
 # direct API, no temp share, no folder iteration.
 # Without a room app password, pi is instructed to tell the user (in the
 # user's language) that the password for file access is missing.
@@ -279,8 +288,9 @@ def _apply_file_param(message, f, cwd):
                 + (f"; share link: {link}" if link else ""))
     try:
         dl = _dav_file_url(*creds, file_id)
-        saved, size = _save_download(dl, name, os.path.join(cwd, "chat",
-                                                            "files"),
+        saved, size = _save_download(dl, name,
+                                     os.path.join(cwd, "workspace", "chat",
+                                                  "files"),
                                      auth=creds)
         log.info("downloaded file %s -> chat/files/%s (%s)",
                  name, saved, _fmt_size(size))
@@ -389,7 +399,8 @@ def id_counter():
 
 
 # --------------------------------------------------------- scheduler ------
-# Rooms can define schedules in <room dir>/schedules.json (managed by pi
+# Rooms can define schedules in <room dir>/workspace/schedules.json (managed
+# by pi
 # via the "scheduler" skill):
 #   {"schedules": [
 #      {"id": "at-news", "prompt": "...", "time": "09:00", "tz": "Europe/Vienna"},
@@ -630,7 +641,7 @@ def _scheduler_tick():
             continue
         for folder in sorted(os.listdir(rooms_dir)):
             cwd = os.path.join(rooms_dir, folder)
-            path = os.path.join(cwd, "schedules.json")
+            path = os.path.join(cwd, "workspace", "schedules.json")
             if not os.path.isdir(cwd) or not os.path.exists(path):
                 continue
             try:
@@ -676,6 +687,7 @@ def _scheduler_tick():
                     "room": token, "room_id": folder,
                     "message": entry["prompt"], "sender": "scheduler",
                     "cwd": cwd,
+                    "workspace": os.path.join(cwd, "workspace"),
                 })
                 log.info("scheduler: fired %s/%s entry %r: %r",
                          bot, folder, entry.get("id"),
@@ -734,10 +746,47 @@ def pi_config_status():
     return False, PI_CONFIG_DIR
 
 
-def pi_command(prompt, session_id):
+def pi_command(prompt, session_id, cwd):
     """Always run in the room's stable pi session: --session-id opens it
-    or creates it (first message of a new room)."""
-    return [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
+    or creates it (first message of a new room). The working directory is
+    the room's workspace/ subfolder; when SANDBOX is on and bwrap exists,
+    the whole run is wrapped in a bubblewrap sandbox (full network)."""
+    cmd = [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
+    ws = os.path.join(cwd, "workspace")
+    if SANDBOX:
+        bwrap = shutil.which("bwrap")
+        if bwrap is None:
+            global _sandbox_warned
+            if not _sandbox_warned:
+                log.warning("SANDBOX=1 but bwrap not found — running pi "
+                            "unsandboxed (install the bubblewrap package)")
+                _sandbox_warned = True
+            return cmd
+        cmd = [bwrap,
+               # read-only root (tools, configs, fonts, ca-certificates;
+               # /run carries the container's DNS in /run/resolv.conf)
+               "--ro-bind", "/usr", "/usr",
+               "--ro-bind", "/etc", "/etc",
+               "--ro-bind", "/var", "/var",
+               "--ro-bind", "/run", "/run",
+               "--ro-bind", "/sys", "/sys",
+               # writable: this room's workspace + the pi home (sessions,
+               # skills, credentials) — nothing else exists inside
+               "--bind", ws, ws,
+               "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
+               # fresh environment, new PID/IPC/UTS namespaces, FULL net
+               "--tmpfs", "/tmp",
+               "--dev", "/dev",
+               "--proc", "/proc",
+               "--unshare-pid",
+               "--unshare-ipc",
+               "--unshare-uts",
+               "--die-with-parent",
+               # HOME points into the workspace (git config, npm cache —
+               # the room stays self-contained, nothing leaks from /root)
+               "--setenv", "HOME", ws,
+               "--chdir", ws] + cmd
+    return cmd
 
 
 def extract_answer_and_thinking(task):
@@ -756,9 +805,9 @@ def extract_answer_and_thinking(task):
 
 def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
-    cmd = pi_command(task["message"], task["session_id"])
+    cmd = pi_command(task["message"], task["session_id"], task["cwd"])
     log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
-    proc = subprocess.Popen(cmd, cwd=task["cwd"],
+    proc = subprocess.Popen(cmd, cwd=task["workspace"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, start_new_session=True)
     task["proc"] = proc
@@ -842,6 +891,7 @@ def requeue_stale():
                 enqueue(key, bot, {
                     "room": room, "room_id": folder, "message": message,
                     "sender": item.get("sender") or "user", "cwd": cwd,
+                    "workspace": os.path.join(cwd, "workspace"),
                 })
                 requeued += 1
                 log.warning("re-queued stale job %s/%s: %r (room=%s)",
@@ -864,6 +914,7 @@ def run_job(key, bot, job):
         "retries": 0,
         "job_id": job["job_id"],
         "job_ids": job.get("job_ids") or [job["job_id"]],
+        "workspace": job["workspace"],
         "session_id": f"{bot}_{os.path.basename(job['cwd'])}",
         "created_at": time.time(),
         "started_at": time.time(),
@@ -874,6 +925,7 @@ def run_job(key, bot, job):
     }
     with _lock:
         _tasks[task["id"]] = task
+    os.makedirs(job["workspace"], exist_ok=True)
     _mark_running(job["cwd"], task)
 
     try:
@@ -1173,6 +1225,7 @@ def webhook(bot):
         "message": message,
         "sender": sender,
         "cwd": cwd,
+        "workspace": os.path.join(cwd, "workspace"),
         "batch": True,
     })
     log.info("queued message from %s in %s", sender, key)

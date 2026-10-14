@@ -46,9 +46,19 @@ os.environ.update({
     "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
     "MESSAGE_BATCH_WINDOW": "1",
+    "SANDBOX": "1",
     "LOG_LEVEL": "INFO",
     "PORT": "8088",
 })
+# fake bwrap on PATH: app.py checks shutil.which("bwrap"); the command is
+# never actually executed (FakePopen replaces subprocess.Popen)
+FAKE_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "fake-bin")
+os.makedirs(FAKE_BIN, exist_ok=True)
+for _name in ("bwrap", "bwrap.exe"):
+    with open(os.path.join(FAKE_BIN, _name), "wb"):
+        pass
+os.environ["PATH"] = FAKE_BIN + os.pathsep + os.environ["PATH"]
 os.makedirs(PI_CFG, exist_ok=True)  # auth.json created later
 
 
@@ -70,6 +80,7 @@ GOOD = [
 
 class FakePopen:
     _seen = set()  # (cwd, prompt) already attempted
+    cmds = []      # every (cwd, cmd) pair — for sandbox assertions
 
     def __init__(self, cmd, **kw):
         self.cmd = cmd
@@ -77,6 +88,7 @@ class FakePopen:
         self.killed = False
         prompt = cmd[-1]
         cwd = kw.get("cwd", "")
+        FakePopen.cmds.append((cwd, list(cmd)))
         key = (cwd, prompt)
         first_attempt = key not in self._seen
         self._seen.add(key)
@@ -266,6 +278,27 @@ check("task done", bool(t) and t["status"] == "done", str(t))
 check("bots dir structure",
       os.path.isdir(os.path.join(BOTS_TEST, "bot1", "rooms", "assibot")))
 
+# 4a. pi runs in the room's workspace, wrapped in a bubblewrap sandbox
+_assi_ws = os.path.join(BOTS_TEST, "bot1", "rooms", "assibot",
+                        "workspace")
+_cwd_used, last_cmd = FakePopen.cmds[-1]
+check("pi runs with the room workspace as working directory",
+      _cwd_used.replace("\\", "/").endswith(
+          "bot1/rooms/assibot/workspace"), str(_cwd_used))
+check("pi runs under bubblewrap",
+      os.path.basename(last_cmd[0]).startswith("bwrap"),
+      str(last_cmd[:1]))
+check("sandbox: read-only root (incl. /run for DNS) + writable workspace "
+      "and pi home",
+      "--ro-bind" in last_cmd and "/usr" in last_cmd and "/run" in last_cmd
+      and last_cmd.count("--bind") == 2
+      and _assi_ws in last_cmd and PI_CFG in last_cmd, str(last_cmd))
+check("sandbox: fresh pid/ipc/uts, full network, chdir into workspace",
+      "--unshare-pid" in last_cmd and "--unshare-ipc" in last_cmd
+      and "--unshare-uts" in last_cmd and "--unshare-net" not in last_cmd
+      and last_cmd[last_cmd.index("--chdir") + 1] == _assi_ws
+      and "fake-pi" in last_cmd, str(last_cmd))
+
 # 4b. /pw room command (per-room app password for file downloads)
 nc_stub.H.share_auth = {"ncuser": "ncpw123"}
 
@@ -325,20 +358,21 @@ t = wait_room_done("bot1/rooms/no-pw-room")
 check("no-password file task done", bool(t) and t["status"] == "done",
       str(t))
 prompted = [p for c, p in FakePopen._seen
-            if c.replace("\\", "/").endswith("bot1/rooms/no-pw-room")]
+            if c.replace("\\", "/").endswith("bot1/rooms/no-pw-room/workspace")]
 check("pi instructed about the missing app password (in user's language)",
       any("app password" in p and "/pw <nextcloud-user> <app-password>" in p
           for p in prompted), str(prompted)[:250])
 check("no dav SEARCH without credentials",
       len(nc_stub.H.search_calls) == directs_before
-      and not os.path.isdir(os.path.join(np_cwd, "chat", "files")),
+      and not os.path.isdir(os.path.join(np_cwd, "workspace",
+                                         "chat", "files")),
       str(nc_stub.H.search_calls))
 
 # 4d. file message with room credentials -> download by file id
 s, body = signed_webhook("bot1", file_payload("look at {file}",
                                               "pwroom0001", "Pw Room"))
 check("file msg with password 202", s == 202, str(s))
-fd = os.path.join(pw_cwd, "chat", "files")
+fd = os.path.join(pw_cwd, "workspace", "chat", "files")
 saved = [f for f in (os.listdir(fd) if os.path.isdir(fd) else [])
          if f.endswith(".webp")]
 check("file downloaded by id into chat/files/",
@@ -355,9 +389,10 @@ t = wait_room_done("bot1/rooms/pw-room")
 check("file task done (with password)", bool(t) and t["status"] == "done",
       str(t))
 check("{file} replaced with the local path in front of the message",
-      wait_prompt(saved[0], "bot1/rooms/pw-room") is not None,
+      wait_prompt(saved[0], "bot1/rooms/pw-room/workspace") is not None,
       str([p[:60] for c, p in FakePopen._seen
-           if c.replace("\\", "/").endswith("bot1/rooms/pw-room")])[:250])
+           if c.replace("\\", "/").endswith(
+               "bot1/rooms/pw-room/workspace")])[:250])
 
 # 4d2. Talk sends the user's text as its own event: file parameter but
 # no {file} token -> the file is still downloaded, path in front
@@ -374,7 +409,7 @@ check("file without {file} token downloaded into chat/files/",
 t = wait_room_done("bot1/rooms/pw-room", min_count=2)
 check("text-event file task done",
       bool(t) and t["status"] == "done", str(t))
-prompt = wait_prompt("I send 2 test files.", "bot1/rooms/pw-room")
+prompt = wait_prompt("I send 2 test files.", "bot1/rooms/pw-room/workspace")
 check("file path added in front of the text message",
       prompt is not None and saved2[0] in prompt
       and prompt.index("chat/files/") < prompt.index("I send 2 test files."),
@@ -389,7 +424,8 @@ s, body = signed_webhook("bot1", file_payload("look at {file}",
 check("file msg with wrong password 202", s == 202, str(s))
 t = wait_room_done("bot1/rooms/pw-room", min_count=3)  # 4d + 4d2 + 4e
 check("failed-download task done", bool(t) and t["status"] == "done", str(t))
-prompt = wait_prompt("download failed (dav search", "bot1/rooms/pw-room")
+prompt = wait_prompt("download failed (dav search",
+                     "bot1/rooms/pw-room/workspace")
 check("wrong password -> failure hint with share link (pi was prompted)",
       prompt is not None and "virtual-link" in prompt, str(prompt))
 
@@ -416,7 +452,7 @@ t = wait_room_done("bot1/rooms/assibot", min_count=3)
 check("batched messages processed", bool(t) and t["status"] == "done",
       str(t))
 batched = [p for c, p in FakePopen._seen
-           if c.replace("\\", "/").endswith("bot1/rooms/assibot")
+           if c.replace("\\", "/").endswith("bot1/rooms/assibot/workspace")
            and "batch one" in p and "batch two" in p]
 check("burst sent to pi as one prompt with both messages",
       len(batched) == 1, str([p[:60] for p in batched]))
@@ -506,7 +542,8 @@ sched_dir = os.path.join(BOTS_TEST, "bot6", "rooms", "news-room")
 os.makedirs(sched_dir)
 with open(os.path.join(sched_dir, ".room.json"), "w") as f:
     json.dump({"token": "sched6ro"}, f)
-sched_file = os.path.join(sched_dir, "schedules.json")
+sched_file = os.path.join(sched_dir, "workspace", "schedules.json")
+os.makedirs(os.path.dirname(sched_file), exist_ok=True)
 with open(sched_file, "w") as f:
     json.dump({"schedules": [
         {"id": "at-news", "prompt": "Send the Austrian news brief.",
@@ -518,8 +555,8 @@ with open(sched_file, "w") as f:
 # a room whose schedules are due but which never got a webhook message
 # (no .room.json -> no token) must NOT produce any post
 notok_dir = os.path.join(BOTS_TEST, "bot6", "rooms", "no-token")
-os.makedirs(notok_dir)
-with open(os.path.join(notok_dir, "schedules.json"), "w") as f:
+os.makedirs(os.path.join(notok_dir, "workspace"), exist_ok=True)
+with open(os.path.join(notok_dir, "workspace", "schedules.json"), "w") as f:
     json.dump({"schedules": [
         {"id": "no-token-room", "prompt": "Should never post.",
          "time": "08:00", "tz": "Europe/Vienna",

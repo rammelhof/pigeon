@@ -22,11 +22,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   Each message is put in a per-room queue; **one worker thread per room**
   runs pi, so sessions are never interleaved.
 * Every Talk room gets its own folder under `bots/<bot>/rooms/`, named
-  after the room (sanitised). pi runs with that folder as working
-  directory **and always in the room's stable pi session**
+  after the room (sanitised). pi runs in the room's `workspace/`
+  subfolder **and always in the room's stable pi session**
   (`pi --session-id <bot>_<room folder>` — created on first use), so the bot
   keeps the full conversation context of each room, across messages and
-  restarts.
+  restarts. Every pi run is wrapped in a bubblewrap sandbox (read-only
+  root, only the room's `workspace/` and the pi home writable, full
+  network access — `SANDBOX=0` disables it).
 * pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
@@ -38,7 +40,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's
   app password) which resolves the dav path, then a plain authenticated
-  GET saves the file into the room's `chat/files/` folder, and the
+  GET saves the file into the room's `workspace/chat/files/` folder, and the
   message that reaches pi gets the local path in front of the user's
   text: `chat/files/starwars-bb-8.webp What is on the pics?` (the
   `{file}` placeholder, if present, is removed). Talk sends **each
@@ -182,7 +184,8 @@ All configuration is via environment variables (see `.env.example`):
 | `SCHEDULER_INTERVAL` | `30` | Seconds between checks of room `schedules.json` files (scheduled tasks) |
 | `MAX_RETRIES` | `1` | Reruns a failed/timed-out task in the same room session |
 | `MESSAGE_BATCH_WINDOW` | `5` | Seconds to wait for more messages from the room before sending the burst to pi (0 = immediate) |
-| `MAX_FILE_SIZE_MB` | `100` | Max size of file attachments downloaded into `chat/files/` |
+| `SANDBOX` | `1` | Run pi in a bubblewrap sandbox (ro root, rw workspace + pi home, full net) |
+| `MAX_FILE_SIZE_MB` | `100` | Max size of file attachments downloaded into `workspace/chat/files/` |
 | `BOTS_DIR` | `/bots` | Where per-bot room folders live |
 | `PI_CODING_AGENT_DIR` | `/pi-home/agent` | pi config dir (auth.json, models.json, sessions) |
 | `PORT` | `8080` | HTTP port |

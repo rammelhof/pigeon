@@ -51,8 +51,13 @@ folder **per Talk room**, created automatically on first message:
 bots/
 ├── bot1/
 │   └── rooms/
-│       ├── dev-team/        # working directory of pi for room "Dev Team"
-│       │   └── .pigeon.json # persisted task queue (pending/running)
+│       ├── dev-team/                # room "Dev Team"
+│       │   ├── .pigeon.json         # persisted task queue (pending/running)
+│       │   ├── .room.json           # room token + app password (600)
+│       │   └── workspace/           # pi's working directory
+│       │       ├── AGENTS.md        # optional per-room instructions
+│       │       ├── schedules.json   # per-room scheduler (pi-managed)
+│       │       └── chat/files/      # downloaded file attachments
 │       ├── home-office/
 │       └── room-47/         # fallback name when the room has no name (1:1)
 └── bot2/
@@ -60,14 +65,38 @@ bots/
         └── ...
 ```
 
-Because pi is started with `cwd=bots/<bot>/rooms/<room>`:
+pi runs in the room's `workspace/` subfolder (pigeon state files like
+`.room.json` sit one level up, outside pi's working directory):
 
-* files pi creates belong to that room,
+* files pi creates belong to that room (inside `workspace/`),
 * pi's per-directory sessions live in the pi config dir
   (`PI_CODING_AGENT_DIR/sessions/...`), so every room keeps its own
   conversation context,
-* you can drop an `AGENTS.md` into a room folder to give that room's agent
-  extra instructions (pi loads `AGENTS.md` from the working directory).
+* you can drop an `AGENTS.md` into the room's `workspace/` folder to give
+  that room's agent extra instructions (pi loads `AGENTS.md` from the
+  working directory),
+* file attachments are downloaded into `workspace/chat/files/` and the
+  message that reaches pi gets the local path in front
+  (`chat/files/<name> <message>`).
+
+### Sandbox: pi runs inside bubblewrap (SANDBOX=1, full network)
+
+Every pi invocation is wrapped in [bubblewrap](https://github.com/containers/bubblewrap):
+
+* **read-only root** — `/usr`, `/etc`, `/var`, `/run` (Docker DNS), `/sys`
+  are bind-mounted read-only; that is the entire tool belt, nothing else
+  exists inside the sandbox,
+* **writable: only** the room's `workspace/` and `PI_CODING_AGENT_DIR`
+  (sessions, skills, model credentials),
+* **fresh namespaces** — new PID/IPC/UTS namespaces, `--die-with-parent`,
+  `HOME` points into the workspace (git config, npm cache stay in-room),
+* **full network access** — no network namespace, the agent has the same
+  internet access as the container (no per-room opt-out flag).
+
+pi therefore cannot read other rooms, pigeon's code, environment variables
+or the `TALK_BOT_SECRET`. If `bwrap` is not installed (e.g. running
+natively), pigeon logs a warning once and runs pi unsandboxed.
+Disable with `SANDBOX=0`.
 
 Bind-mounting the tree on the host means you can inspect/backup/edit room
 state directly. Delete a bot or room folder (while the container is
@@ -177,7 +206,7 @@ All in `.env` (compose reads it automatically):
   (it 404s), but its `id` is a real file id, so pigeon resolves it with a
   single WebDAV SEARCH (`basicsearch` on `oc:fileid`, Basic auth with the
   room's **app password**) which returns the file's dav `href`, then a
-  plain authenticated GET streams it into the room's `chat/files/`
+  plain authenticated GET streams it into the room's `workspace/chat/files/`
   folder — no direct API, no temp share, no folder iteration. The
   message that reaches pi gets the local path in front of the user's
   text (`chat/files/<name> <message>`; a `{file}` placeholder is
@@ -273,7 +302,7 @@ or in `./skills/` in this repo (bundled, updated with rebuilds).
 
 **Scheduling.** With the `scheduler` skill you simply ask the bot in a
 room, e.g. *"send me news for austria every day at 09:00"* or
-*"list all scheduled tasks"*. pi maintains `<room dir>/schedules.json`:
+*"list all scheduled tasks"*. pi maintains `<room dir>/workspace/schedules.json`:
 
 ```json
 {"schedules": [
