@@ -772,14 +772,16 @@ def pi_command(prompt, session_id, cwd):
                "--symlink", "usr/lib", "/lib",
                "--symlink", "usr/bin", "/bin",
                "--symlink", "usr/sbin", "/sbin",
+               # mask sensitive paths FIRST (empty, private to this
+               # sandbox): other rooms incl. their .room.json, pigeon's
+               # code. Ops are applied in order, so the writable binds
+               # below pierce the /bots mask at exactly the workspace
+               "--tmpfs", BOTS_DIR,
+               "--tmpfs", "/app",
                # writable: this room's workspace + the pi home (sessions,
                # skills, model credentials)
                "--bind", ws, ws,
                "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
-               # mask sensitive paths (empty, private to this sandbox):
-               # other rooms incl. their .room.json, and pigeon's code
-               "--tmpfs", BOTS_DIR,
-               "--tmpfs", "/app",
                # inherit NO environment (TALK_BOT_SECRET lives in
                # gunicorn's) — set only what pi needs; HOME in the
                # workspace keeps the room self-contained

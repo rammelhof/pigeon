@@ -308,6 +308,10 @@ check("sandbox: sensitive paths masked + clean env (no TALK_BOT_SECRET)",
       "--tmpfs" in last_cmd and BOTS_TEST in last_cmd and "/app" in last_cmd
       and "--clearenv" in last_cmd and "--setenv" in last_cmd
       and "PATH" in last_cmd, str(last_cmd))
+check("sandbox: masks applied BEFORE the workspace bind (ws is under "
+      "BOTS_DIR, a later tmpfs would hide it)",
+      last_cmd.index(BOTS_TEST) < last_cmd.index("--bind"),
+      str(last_cmd))
 check("sandbox: fresh pid/ipc/uts, full network, chdir into workspace",
       "--unshare-pid" in last_cmd and "--unshare-ipc" in last_cmd
       and "--unshare-uts" in last_cmd and "--unshare-net" not in last_cmd
