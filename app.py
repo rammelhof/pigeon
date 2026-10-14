@@ -243,9 +243,13 @@ def _save_download(dl_url, name, dest_dir, auth=None):
     return os.path.basename(dest), size
 
 
-def _replace_file_placeholder(message, f, cwd):
-    """Replace {file} with a local-file hint (download ok), a failure hint,
-    or an instruction for pi to tell the user the app password is missing."""
+def _apply_file_param(message, f, cwd):
+    """Download the file from the webhook's file parameter into the room's
+    chat/files/ and put its path in front of the message
+    ("chat/files/<name> <message>"). Without a room app password, pi is
+    instructed to tell the user (in the user's language) that the password
+    for file access is missing. Download failures yield a hint with the
+    share link so the bot can still react."""
     name = f.get("name") or "file"
     mime = f.get("mimetype") or "unknown type"
     link = f.get("link") or ""
@@ -275,8 +279,12 @@ def _replace_file_placeholder(message, f, cwd):
                                      auth=creds)
         log.info("downloaded file %s -> chat/files/%s (%s)",
                  name, saved, _fmt_size(size))
-        return (f"[file: {name} ({mime}, {_fmt_size(size)})] — downloaded "
-                f"to chat/files/{saved} in the working directory")
+        hint = f"chat/files/{saved}"
+        if "{file}" in message:
+            rest = re.sub(r"\s+", " ",
+                          message.replace("{file}", " ")).strip()
+            return (f"{hint} {rest}" if rest else hint)
+        return f"{hint} {message.strip()}".strip()
     except Exception as e:
         log.warning("file download failed: %s", e)
         return (f"[file: {name} ({mime})] — download failed ({e})"
@@ -1113,11 +1121,13 @@ def webhook(bot):
                                  "container once and /login, or add a "
                                  f"models.json to {config_file}"}), 503
 
-    # file attachment: download via the room's app password (OCS dav
-    # direct link) — or instruct pi that the password is missing
-    if "{file}" in message:
-        f = _payload_file_param(payload)
-        message = (_replace_file_placeholder(message, f, cwd) if f
+    # file attachment: Talk sends each attachment as its own event — the
+    # {file} placeholder (if any) and/or a file parameter. Download via
+    # WebDAV SEARCH with the room's app password and put the local path in
+    # front of the message — or instruct pi that the password is missing.
+    f = _payload_file_param(payload)
+    if f is not None or "{file}" in message:
+        message = (_apply_file_param(message, f, cwd) if f
                    else message.replace("{file}",
                                         "[file: no file data in payload]"))
 

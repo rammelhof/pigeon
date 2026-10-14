@@ -353,10 +353,31 @@ if saved:
 t = wait_room_done("bot1/rooms/pw-room")
 check("file task done (with password)", bool(t) and t["status"] == "done",
       str(t))
-check("{file} replaced with hint to the local file (pi was prompted with it)",
+check("{file} replaced with the local path in front of the message",
       wait_prompt(saved[0], "bot1/rooms/pw-room") is not None,
       str([p[:60] for c, p in FakePopen._seen
            if c.replace("\\", "/").endswith("bot1/rooms/pw-room")])[:250])
+
+# 4d2. Talk sends the user's text as its own event: file parameter but
+# no {file} token -> the file is still downloaded, path in front
+s, body = signed_webhook("bot1",
+                         file_payload("I send 2 test files.",
+                                      "pwroom0001", "Pw Room",
+                                      name="starwars-c-3po.png"))
+check("text event with file param 202", s == 202, str(s))
+saved2 = [f for f in (os.listdir(fd) if os.path.isdir(fd) else [])
+          if f.endswith(".png")]
+check("file without {file} token downloaded into chat/files/",
+      len(saved2) == 1 and saved2[0].endswith("starwars-c-3po.png"),
+      str(saved2))
+t = wait_room_done("bot1/rooms/pw-room", min_count=2)
+check("text-event file task done",
+      bool(t) and t["status"] == "done", str(t))
+prompt = wait_prompt("I send 2 test files.", "bot1/rooms/pw-room")
+check("file path added in front of the text message",
+      prompt is not None and saved2[0] in prompt
+      and prompt.index("chat/files/") < prompt.index("I send 2 test files."),
+      str(prompt)[:200])
 
 # 4e. wrong credentials -> failure hint + share link, task still runs
 signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
@@ -365,7 +386,7 @@ signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
 s, body = signed_webhook("bot1", file_payload("look at {file}",
                                               "pwroom0001", "Pw Room"))
 check("file msg with wrong password 202", s == 202, str(s))
-t = wait_room_done("bot1/rooms/pw-room", min_count=2)  # 4d + 4e tasks
+t = wait_room_done("bot1/rooms/pw-room", min_count=3)  # 4d + 4d2 + 4e
 check("failed-download task done", bool(t) and t["status"] == "done", str(t))
 prompt = wait_prompt("download failed (dav search", "bot1/rooms/pw-room")
 check("wrong password -> failure hint with share link (pi was prompted)",

@@ -38,8 +38,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's
   app password) which resolves the dav path, then a plain authenticated
-  GET saves the file, and the placeholder is replaced with a hint that
-  points pi at the local file. Each room stores its own Nextcloud
+  GET saves the file into the room's `chat/files/` folder, and the
+  message that reaches pi gets the local path in front of the user's
+  text: `chat/files/starwars-bb-8.webp What is on the pics?` (the
+  `{file}` placeholder, if present, is removed). Talk sends **each
+  attachment as its own event** (the user's text usually travels with
+  one of them), so multiple files arrive as several messages that queue
+  up in the same room session. Each room stores its own Nextcloud
   **app password** (user + password in the room's `.room.json`, never
   shared with other rooms):
   * in a room, send `/pw <nextcloud-user> <app-password>` to configure

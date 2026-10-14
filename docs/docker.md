@@ -177,7 +177,12 @@ All in `.env` (compose reads it automatically):
   single WebDAV SEARCH (`basicsearch` on `oc:fileid`, Basic auth with the
   room's **app password**) which returns the file's dav `href`, then a
   plain authenticated GET streams it into the room's `chat/files/`
-  folder — no direct API, no temp share, no folder iteration. Each room
+  folder — no direct API, no temp share, no folder iteration. The
+  message that reaches pi gets the local path in front of the user's
+  text (`chat/files/<name> <message>`; a `{file}` placeholder is
+  removed). Talk sends each attachment as its own event (the user's
+  text usually travels with one of them), so several files arrive as
+  several messages in the same room session. Each room
   keeps its own credentials in
   its `.room.json` (`{"token": …, "nextcloud_user": …,
   "nextcloud_password": …}`, mode 600) — rooms do not share information
