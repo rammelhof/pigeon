@@ -92,7 +92,15 @@ class FakePopen:
         key = (cwd, prompt)
         first_attempt = key not in self._seen
         self._seen.add(key)
-        if "make-fail" in prompt and first_attempt:
+        if (os.path.basename(cmd[0]).startswith("bwrap")
+                and os.environ.get("FAKE_BWRAP_FAIL") == "1"):
+            # simulate: sandbox cannot start in this container
+            self.returncode = 1
+            self.stdout = iter([])
+            self.stderr = io.StringIO(
+                "bwrap: Creating new namespace failed: Operation not "
+                "permitted\n")
+        elif "make-fail" in prompt and first_attempt:
             self.returncode = 1
             self.stdout = iter([])
             self.stderr = io.StringIO("boom: provider error")
@@ -299,6 +307,20 @@ check("sandbox: fresh pid/ipc/uts, full network, chdir into workspace",
       and last_cmd[last_cmd.index("--chdir") + 1] == _assi_ws
       and "fake-pi" in last_cmd, str(last_cmd))
 
+# 4a2. bwrap exists but cannot start -> the task FAILS (no fallback)
+os.environ["FAKE_BWRAP_FAIL"] = "1"
+s, body = signed_webhook("bot1", new_payload("sandbox down"))
+check("webhook 202 (sandbox-down room msg)", s == 202, str(s))
+t = wait_room_done("bot1/rooms/assibot", timeout=25, min_count=2)
+check("unstartable sandbox fails the task (no unsandboxed fallback)",
+      bool(t) and t["status"] == "failed" and "bwrap" in (t["error"] or ""),
+      str(t))
+del os.environ["FAKE_BWRAP_FAIL"]
+_attempts = [os.path.basename(c[1][0]).casefold() for c in FakePopen.cmds]
+_bwrap_tail = [c for c in _attempts if c.startswith("bwrap")][-2:]
+check("every attempt used bwrap (pi never ran unsandboxed)",
+      len(_bwrap_tail) == 2, str(_attempts[-4:]))
+
 # 4b. /pw room command (per-room app password for file downloads)
 nc_stub.H.share_auth = {"ncuser": "ncpw123"}
 
@@ -439,9 +461,12 @@ check("non-message event ignored", s == 200 and body.get("ignored"), str(body))
 s, body = signed_webhook("bot1", new_payload("   "))
 check("empty message ignored", s == 200 and body.get("ignored"), str(body))
 
-# 7. failing prompt -> retried with --continue -> done
-s, _ = signed_webhook("bot1", new_payload("make-fail"))
-t = wait_room_done("bot1/rooms/assibot", min_count=2, retries=1)
+# 7. failing prompt -> retried -> done (own room: no cross-talk with the
+# batch tests below)
+s, _ = signed_webhook("bot1", new_payload("make-fail",
+                                          room_token="fail0001",
+                                          room_name="Fail Room"))
+t = wait_room_done("bot1/rooms/fail-room", retries=1)
 check("failed run retried and done",
       bool(t) and t["status"] == "done" and t["retries"] == 1, str(t))
 

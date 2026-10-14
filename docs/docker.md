@@ -94,9 +94,14 @@ Every pi invocation is wrapped in [bubblewrap](https://github.com/containers/bub
   internet access as the container (no per-room opt-out flag).
 
 pi therefore cannot read other rooms, pigeon's code, environment variables
-or the `TALK_BOT_SECRET`. If `bwrap` is not installed (e.g. running
-natively), pigeon logs a warning once and runs pi unsandboxed.
-Disable with `SANDBOX=0`.
+or the `TALK_BOT_SECRET`.
+
+**No fallback**: if `bwrap` is missing or cannot start (e.g. the
+container's seccomp profile blocks `unshare`, or `CAP_SYS_ADMIN` is not
+granted), pi runs fail with a clear error instead of running unsandboxed.
+The shipped `docker-compose.yml` already sets `security_opt:
+seccomp=unconfined` and `cap_add: SYS_ADMIN`, which the sandbox needs. Set
+`SANDBOX=0` to run without the sandbox explicitly.
 
 Bind-mounting the tree on the host means you can inspect/backup/edit room
 state directly. Delete a bot or room folder (while the container is

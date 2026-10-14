@@ -87,10 +87,9 @@ MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 MESSAGE_BATCH_WINDOW = float(os.environ.get("MESSAGE_BATCH_WINDOW", "5"))
 # Run every pi invocation in a bubblewrap sandbox: read-only root, only
 # the room's workspace/ and PI_CODING_AGENT_DIR writable, fresh PID/IPC/
-# UTS namespaces, full network access (0 = off). Needs the bubblewrap
-# package; without it pi runs unsandboxed (with a warning).
+# UTS namespaces, full network access (0 = off). There is NO fallback:
+# if SANDBOX is on but bwrap is missing or cannot start, pi runs fail.
 SANDBOX = os.environ.get("SANDBOX", "1") == "1"
-_sandbox_warned = False
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # max size in MB of file attachments downloaded into the room's
 # workspace/chat/files/
@@ -756,12 +755,8 @@ def pi_command(prompt, session_id, cwd):
     if SANDBOX:
         bwrap = shutil.which("bwrap")
         if bwrap is None:
-            global _sandbox_warned
-            if not _sandbox_warned:
-                log.warning("SANDBOX=1 but bwrap not found — running pi "
-                            "unsandboxed (install the bubblewrap package)")
-                _sandbox_warned = True
-            return cmd
+            raise RuntimeError("SANDBOX=1 but bwrap not found — install "
+                               "bubblewrap or set SANDBOX=0")
         cmd = [bwrap,
                # read-only root (tools, configs, fonts, ca-certificates;
                # /run carries the container's DNS in /run/resolv.conf)

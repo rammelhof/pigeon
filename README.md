@@ -28,7 +28,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   keeps the full conversation context of each room, across messages and
   restarts. Every pi run is wrapped in a bubblewrap sandbox (read-only
   root, only the room's `workspace/` and the pi home writable, full
-  network access — `SANDBOX=0` disables it).
+  network access — no fallback: a broken sandbox fails the run,
+  `SANDBOX=0` disables it).
 * pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
   parsed; the assistant's **thinking** (quoted with 🤔) and the **answer**
