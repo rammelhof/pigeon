@@ -29,6 +29,11 @@ class H(BaseHTTPRequestHandler):
                           "start": "2000-01-01T08:00:00+01:00"}],
                "work": [], "privat": [], "Privat (2)": []}
     put_calls = []  # (method, path) for the /nc proxy tests
+    # /v1/audio/transcriptions (STT): calls recorded as
+    # (authorization_header, model, filename); expected api key
+    stt_calls = []
+    stt_key = "Bearer TEST-KEY"
+    stt_text = "hallo, das ist eine test-sprachnachricht"
 
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -297,6 +302,21 @@ class H(BaseHTTPRequestHandler):
         self._json({"ok": True}, code=204)
 
     def do_POST(self):
+        if self.path.rstrip("/") == "/v1/audio/transcriptions":
+            n = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(n)  # binary multipart — keep as bytes
+            auth = self.headers.get("Authorization", "")
+            model = re.search(rb'name="model"\r\n\r\n([^\r]+)', raw)
+            fname = re.search(rb'filename="([^"]+)"', raw)
+            H.stt_calls.append(
+                (auth,
+                 model.group(1).decode() if model else None,
+                 fname.group(1).decode() if fname else None))
+            if auth != H.stt_key:
+                self._json({"error": "unauthorized"}, code=401)
+                return
+            self._json({"text": H.stt_text})
+            return
         body = self._body()
         if "/ocs/v2.php/apps/spreed/api/v1/bot/" in self.path \
                 and self.path.endswith("/message"):

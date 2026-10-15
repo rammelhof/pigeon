@@ -61,6 +61,26 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
     *Personal Information → Security* (do not use real account passwords)
   * the `/pw` message passes through the room's Talk history — delete it
     afterwards, or edit `.room.json` on the host for a no-trace setup
+* **Voice messages** (per installation): a Talk voice message is a
+  `audio/wav` attachment. pigeon downloads it, transcribes it with an
+  OpenAI-compatible STT endpoint
+  (`POST {endpoint}/v1/audio/transcriptions` with `model` + `file`),
+  posts the extracted text back to the room and queues that text for pi
+  — the raw audio never reaches pi. The endpoint, model and API key are
+  configured in **`.pigeon.json` in the bots root folder** (created as an
+  empty boilerplate at startup when missing):
+
+      {
+        "transcription": {
+          "endpoint": "http://ai.example.com",
+          "model": "STT",
+          "api_key": "..."
+        }
+      }
+
+  If the config is incomplete (or the room has no app password, or the
+  download/transcription fails), pigeon posts the error to the room
+  instead of queueing anything.
 * **Message batching**: a room worker waits up to `MESSAGE_BATCH_WINDOW`
   seconds after a chat message for more messages from the same room and
   sends the whole burst to pi in a single run (as one prompt with the
@@ -256,6 +276,7 @@ pigeon/
   scheduler.py    schedules.json time math + tick
   skills.py       bundled skill sync into the pi home
   nc_proxy.py     /nc routes: token-gated Nextcloud proxy for pi
+  stt.py          .pigeon.json STT config + audio/wav transcription
   web.py          Flask app: /, /health, /webhook/<bot>, startup/shutdown
 wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> pigeon.web.startup())
 skills/           pi skills mounted into the container (scheduler, austria-news, …)

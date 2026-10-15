@@ -15,14 +15,15 @@ import time
 
 from flask import Flask, jsonify, request
 
-from . import nc_proxy, scheduler, skills, tasks
+from . import nc_proxy, scheduler, skills, stt, tasks
 from .config import (BOTS_DIR, COMMIT, HEARTBEAT_INTERVAL, PI_CONFIG_DIR,
                      TALK_BOT_SECRET, VERSION, log)
-from .nextcloud import apply_file_param, payload_file_param, post_message
+from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
+                        post_message, save_download)
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, clean_session_and_workspace, folder_for_room,
                    handle_bot_added, handle_bot_removed, handle_pw_command,
-                   room_dir, write_room_token)
+                   room_creds, room_dir, write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -153,9 +154,16 @@ def webhook(bot):
 
     # regular chat message from here on
     message = parsed["message"]
+    sender = parsed["sender"]
+
+    # voice message (audio/wav) — may arrive with no message text at all:
+    # transcribe it, post the text back and hand the text to pi
+    f = payload_file_param(payload)
+    if f is not None and stt.is_voice_file(f):
+        return handle_voice_message(bot, folder, room, f, cwd, sender)
+
     if not message:
         return jsonify({"ignored": "empty message"}), 200
-    sender = parsed["sender"]
 
     os.makedirs(cwd, exist_ok=True)
     write_room_token(cwd, room)  # needed for scheduled tasks to reply
@@ -184,7 +192,6 @@ def webhook(bot):
     # {file} placeholder (if any) and/or a file parameter. Download via
     # WebDAV SEARCH with the room's app password and put the local path in
     # front of the message — or instruct pi that the password is missing.
-    f = payload_file_param(payload)
     if f is not None or "{file}" in message:
         message = (apply_file_param(message, f, cwd) if f
                    else message.replace("{file}",
@@ -202,6 +209,65 @@ def webhook(bot):
     })
     log.info("queued message from %s in %s", sender, key)
     return jsonify({"queued": True, "bot": bot, "room_folder": folder}), 202
+
+
+def handle_voice_message(bot, folder, room, f, cwd, sender):
+    """Voice message (audio/wav): download the file, transcribe it with the
+    configured STT endpoint (.pigeon.json in the bots folder), post the
+    extracted text back to the room and queue that text for pi. Any failure
+    is reported in the chat — pi never sees the raw audio."""
+    name = f.get("name") or "voice message"
+    os.makedirs(cwd, exist_ok=True)
+    write_room_token(cwd, room)  # needed for scheduled tasks to reply
+
+    cfg = stt.transcription_config()
+    if cfg is None:
+        reply = ("⚠ Voice messages are not configured yet: set "
+                 "transcription.endpoint, transcription.model and "
+                 "transcription.api_key in .pigeon.json in the bots "
+                 "folder, then send the message again.")
+        post_message(room, reply)
+        return jsonify({"handled": "stt-unconfigured"}), 200
+
+    creds = room_creds(cwd)
+    if creds is None:
+        reply = ("⚠ I cannot download voice messages: this room has no "
+                 "app password for file access yet. Send "
+                 "/pw <nextcloud-user> <app-password> first.")
+        post_message(room, reply)
+        return jsonify({"handled": "stt-no-credentials"}), 200
+
+    try:
+        dl = dav_file_url(creds, int(f.get("id")))
+        saved, _size = save_download(
+            dl, name, os.path.join(cwd, "workspace", "chat", "files"),
+            auth=creds)
+        wav_path = os.path.join(cwd, "workspace", "chat", "files", saved)
+    except Exception as e:
+        log.warning("voice download failed (%s): %s", name, e)
+        post_message(room, f"⚠ Downloading the voice message failed: {e}")
+        return jsonify({"error": "download failed"}), 502
+
+    try:
+        text = stt.transcribe(cfg, wav_path)
+    except Exception as e:
+        log.warning("voice transcription failed (%s): %s", name, e)
+        post_message(room, f"⚠ Transcription failed: {e}")
+        return jsonify({"error": "transcription failed"}), 502
+
+    post_message(room, text)
+    key = f"{bot}/{folder}"
+    tasks.enqueue(key, bot, {
+        "room": room,
+        "room_id": folder,
+        "message": text,
+        "sender": sender,
+        "cwd": cwd,
+        "workspace": os.path.join(cwd, "workspace"),
+        "batch": True,
+    })
+    log.info("voice message transcribed in %s (%d chars)", key, len(text))
+    return jsonify({"queued": True, "bot": bot, "transcribed": True}), 202
 
 
 # -------------------------------------------------------- startup/shutdown --
@@ -227,6 +293,7 @@ def startup():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
     os.makedirs(BOTS_DIR, exist_ok=True)
+    stt.ensure_config_file()  # .pigeon.json boilerplate in the bots folder
     synced = skills.sync_skills()
     if synced:
         log.info("synced %d bundled skill(s) into %s", synced,
