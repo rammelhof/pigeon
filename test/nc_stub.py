@@ -141,21 +141,23 @@ class H(BaseHTTPRequestHandler):
             # Nextcloud's Depth-1 answer contains the calendar-home
             # collection itself first (resourcetype calendar-home-set, NOT
             # a calendar — accessing it 404s), then one response per
-            # real calendar (resourcetype c:calendar).
+            # real calendar (resourcetype c:calendar). Note: the prefix
+            # here is 'cal', deliberately different from the 'c' the
+            # client requests — servers pick their own prefixes.
             xml = ('<d:multistatus xmlns:d="DAV:" '
-                   'xmlns:c="urn:ietf:params:xml:ns:caldav">'
+                   'xmlns:cal="urn:ietf:params:xml:ns:caldav">'
                    '<d:response><d:href>/remote.php/dav/calendars/u/'
                    '</d:href><d:propstat><d:prop>'
                    '<d:displayname>u</d:displayname>'
                    '<d:resourcetype><d:collection/>'
-                   '<c:calendar-home-set/></d:resourcetype></d:prop>'
+                   '<cal:calendar-home-set/></d:resourcetype></d:prop>'
                    '<d:status>HTTP/1.1 200 OK</d:status>'
                    '</d:propstat></d:response>'
                    + "".join(
                        f"<d:response><d:href>/remote.php/dav/calendars/"
                        f"u/{c}/</d:href><d:propstat><d:prop>"
                        f"<d:displayname>{n}</d:displayname>"
-                       f"<d:resourcetype><d:collection/><c:calendar/>"
+                       f"<d:resourcetype><d:collection/><cal:calendar/>"
                        f"</d:resourcetype></d:prop>"
                        f"<d:status>HTTP/1.1 200 OK</d:status>"
                        f"</d:propstat></d:response>"

@@ -23,9 +23,9 @@ import requests
 from flask import Blueprint, Response, jsonify, request
 
 from .config import BOTS_DIR, MAX_FILE_SIZE_MB, NEXTCLOUD_URL, log
-from .nextcloud import (UnknownCalendar, caldav_base, caldav_calendars,
-                        caldav_create, caldav_events, caldav_resolve,
-                        dav_path, dav_prop)
+from .nextcloud import (UnknownCalendar, _dbg, caldav_base,
+                        caldav_calendars, caldav_create, caldav_events,
+                        caldav_resolve, dav_path, dav_prop)
 from .room import ROOM_DIR_RE, room_creds
 from .security import nc_verify
 
@@ -102,6 +102,7 @@ def files_list_or_download(bot, room):
                          auth=creds, data=body.encode(),
                          headers={"Depth": "1",
                                   "Content-Type": "text/xml"}, timeout=30)
+    _dbg(r, f"PROPFIND {url}/")
     if r.status_code not in (200, 207):
         return jsonify({"error": f"list: HTTP {r.status_code}"}), 502
     files = []

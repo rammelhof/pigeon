@@ -79,6 +79,7 @@ def dav_file_url(creds, file_id):
                          auth=creds, data=xml.encode(),
                          headers={"Content-Type": "application/xml",
                                   "Depth": "0"}, timeout=30)
+    _dbg(r, f"SEARCH fileid {file_id}")
     if r.status_code not in (200, 207):
         raise RuntimeError(f"dav search: HTTP {r.status_code}")
     m = re.search(r"<d:href>([^<]+)</d:href>", r.text)
@@ -197,11 +198,25 @@ def caldav_base(user):
             + str(user).split("@", 1)[0])
 
 
+def _dbg(r, what):
+    """Log a Nextcloud response: body for XML/JSON, size for the rest
+    (file contents etc. stay out of the log)."""
+    ct = r.headers.get("Content-Type", "")
+    if "xml" in ct or "json" in ct:
+        log.debug("nc %s: HTTP %s %s, body: %s",
+                  what, r.status_code, ct, r.text[:4000])
+    else:
+        log.debug("nc %s: HTTP %s %s (%d bytes)",
+                  what, r.status_code, ct, len(r.content))
+
+
 def caldav_calendars(creds):
     """[{name, id}] of the real calendars via PROPFIND with Depth 1.
-    Only entries whose resourcetype is c:calendar count — the
+    Only entries whose resourcetype is a CalDAV calendar count — the
     calendar-home collection itself (and any other collections) are
-    listed too, but they are not calendars and 404 on access."""
+    listed too, but they are not calendars and 404 on access. The
+    namespace prefix in the answer is server-defined, so match
+    <anything:calendar> prefix-independently."""
     base = caldav_base(creds[0])
     prop = ("<prop xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
             "<d:displayname/><d:resourcetype/><c:calendar-color/></prop>")
@@ -210,6 +225,7 @@ def caldav_calendars(creds):
     r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
                          headers={"Depth": "1", "Content-Type": "text/xml"},
                          timeout=30)
+    _dbg(r, f"PROPFIND {base}")
     if r.status_code not in (200, 207):
         raise RuntimeError(f"calendars: HTTP {r.status_code}")
     out = []
@@ -217,7 +233,7 @@ def caldav_calendars(creds):
             r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
             r.text, re.S):
         url, blk = m.group(1), m.group(2)
-        if not re.search(r"<c:calendar[/>]", blk):
+        if not re.search(r"<\w+:calendar[\s/>]", blk):
             continue  # the calendar-home set itself, not a calendar
         dm = re.search(r"<d:displayname>([^<]*)</d:displayname>", blk)
         out.append({"name": dm.group(1).strip() if dm else "",
@@ -296,6 +312,7 @@ def caldav_events(creds, calid, t_from, t_to):
     calid = caldav_resolve(creds, calid)
     r = requests.get(f"{caldav_base(creds[0])}/{calid}/", auth=creds,
                      headers={"Accept": "text/calendar"}, timeout=60)
+    _dbg(r, f"GET calendar {calid}")
     if r.status_code != 200:
         raise RuntimeError(f"events: HTTP {r.status_code}")
     text = re.sub(r"\r?\n[ \t]", "", r.text)  # unfold ICS continuation
