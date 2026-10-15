@@ -132,7 +132,7 @@ def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
                      task["bot"], task["room_id"])
-    log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
+    log.debug("task %s: running %s", task["id"], " ".join(cmd[:-1]))
     # the full prompt (which may be a batched multi-message one) is only
     # interesting for debugging — keep it at debug level
     log.debug("task %s: prompt for session %s (room %s):\n%s",
