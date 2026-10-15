@@ -655,6 +655,22 @@ check("pi got the transcribed text (not the wav)",
       str([p[:60] for c, p in FakePopen._seen
            if c.replace("\\", "/").endswith("bot1/rooms/voice-room/workspace")])[:250])
 
+# mp3 voice messages go through the same path
+s, body = signed_webhook("bot1",
+                         file_payload("", "voicerm001", "Voice Room",
+                                      file_id=77004,
+                                      name="Sprachnachricht 3.mp3",
+                                      mimetype="audio/mpeg"))
+check("mp3 voice message transcribed via the same path",
+      s == 202 and body.get("transcribed") is True
+      and len(nc_stub.H.stt_calls) == 2
+      and nc_stub.H.stt_calls[1][2] is not None
+      and nc_stub.H.stt_calls[1][2].endswith(".mp3")
+      and nc_stub.H.stt_calls[1][0] == "Bearer TEST-KEY",
+      f"{s} {body} {nc_stub.H.stt_calls}")
+t = wait_room_done("bot1/rooms/voice-room", min_count=2)
+check("mp3 task done", bool(t) and t["status"] == "done", str(t))
+
 # 4d3. /nc — the room's Nextcloud proxy (files + calendar), token auth
 ncx_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "ncx")
 s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",

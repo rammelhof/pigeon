@@ -156,8 +156,8 @@ def webhook(bot):
     message = parsed["message"]
     sender = parsed["sender"]
 
-    # voice message (audio/wav) — may arrive with no message text at all:
-    # transcribe it, post the text back and hand the text to pi
+    # voice message (audio/wav, audio/mpeg) — may arrive with no message
+    # text at all: transcribe it, post the text back and hand the text to pi
     f = payload_file_param(payload)
     if f is not None and stt.is_voice_file(f):
         return handle_voice_message(bot, folder, room, f, cwd, sender)
@@ -212,10 +212,10 @@ def webhook(bot):
 
 
 def handle_voice_message(bot, folder, room, f, cwd, sender):
-    """Voice message (audio/wav): download the file, transcribe it with the
-    configured STT endpoint (.pigeon.json in the bots folder), post the
-    extracted text back to the room and queue that text for pi. Any failure
-    is reported in the chat — pi never sees the raw audio."""
+    """Voice message (audio/wav, audio/mpeg): download the file, transcribe
+    it with the configured STT endpoint (.pigeon.json in the bots folder),
+    post the extracted text back to the room and queue that text for pi.
+    Any failure is reported in the chat — pi never sees the raw audio."""
     name = f.get("name") or "voice message"
     os.makedirs(cwd, exist_ok=True)
     write_room_token(cwd, room)  # needed for scheduled tasks to reply

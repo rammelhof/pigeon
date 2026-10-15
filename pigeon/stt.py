@@ -1,7 +1,8 @@
 """Speech-to-text for voice messages.
 
-Talk delivers voice messages as `audio/wav` file attachments. pigeon
-downloads them (WebDAV SEARCH + GET, like any other file) and sends them
+Talk delivers voice messages as ``audio/wav`` or ``audio/mpeg`` file
+attachments (``*.wav`` / ``*.mp3``). pigeon downloads them (WebDAV SEARCH
++ GET, like any other file) and sends them
 to an OpenAI-compatible transcription endpoint
 (``POST {endpoint}/v1/audio/transcriptions``, multipart with ``model`` and
 ``file``). The endpoint, model and API key live in ``.pigeon.json`` in
@@ -10,7 +11,7 @@ missing):
 
     {
       "transcription": {
-        "endpoint": "http://ai.example.com",
+        "endpoint": "https://ai.example.com",
         "model": "STT",
         "api_key": "..."
       }
@@ -71,12 +72,13 @@ def transcription_config():
 
 
 def is_voice_file(f):
-    """True for Talk voice messages: *.wav attachments."""
+    """True for Talk voice messages: *.wav / *.mp3 attachments."""
     if not isinstance(f, dict):
         return False
     name = str(f.get("name") or "").lower()
     mime = str(f.get("mimetype") or "").lower()
-    return name.endswith(".wav") or mime in ("audio/wav", "audio/x-wav")
+    return (name.endswith((".wav", ".mp3"))
+            or mime in ("audio/wav", "audio/x-wav", "audio/mpeg"))
 
 
 def transcribe(cfg, wav_path):
