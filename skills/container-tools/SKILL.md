@@ -20,6 +20,8 @@ Preinstalled in this container (Debian bookworm, `node:24` base):
 - `sqlite3`, `redis-cli`, `xmlstarlet`, `dos2unix`, `hunspell`
   (`hunspell -d de_AT` / `-d en_US`).
 - `python3`, `node` — scripting; `npm` for Node tooling.
+- `dotnet` — .NET SDK 10 (C#/F#): `dotnet new console|web`, `dotnet build`,
+  `dotnet run`, `dotnet test`.
 - `dig`, `nc`, `lsof`, `htop`, `tmux`, `ssh` (OpenSSH client) — network
   and process inspection.
 - `bwrap` — bubblewrap (pigeon uses it to sandbox pi runs).

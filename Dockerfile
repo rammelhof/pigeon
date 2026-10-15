@@ -61,6 +61,16 @@ RUN apt-get update \
         gh \
     && rm -rf /var/lib/apt/lists/*
 
+# .NET SDK (current LTS) via Microsoft's apt repo (official install path,
+# https://learn.microsoft.com/dotnet/core/install/linux-debian)
+RUN wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
+        -O /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y dotnet-sdk-10.0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # pi coding agent (CLI)
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
