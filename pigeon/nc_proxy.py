@@ -14,6 +14,7 @@ not in pi's environment on purpose: the proxy is the only door.
   DELETE /nc/<bot>/<room>/calendars/<calid>/<uid>      delete (UID)
 """
 
+import functools
 import os
 import re
 from datetime import datetime, timedelta
@@ -28,6 +29,24 @@ from .room import ROOM_DIR_RE, room_creds
 from .security import nc_verify
 
 bp = Blueprint("nc", __name__)
+
+
+def logged(view):
+    """One info line per /nc request: method, path, args, status code,
+    bot and room — for successful and rejected (401/403/404/400/413/
+    502) requests alike. No tokens or passwords ever reach the log."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        response = view(*args, **kwargs)
+        code = response[1] if isinstance(response, tuple) \
+            else response.status_code
+        log.info("nc: %s %s -> %s (bot=%s room=%s)",
+                 request.method,
+                 request.full_path.rstrip("?"), code,
+                 request.view_args.get("bot"),
+                 request.view_args.get("room"))
+        return response
+    return wrapper
 
 
 def _authorized(bot, room):
@@ -53,6 +72,7 @@ def _authorized(bot, room):
 
 
 @bp.get("/nc/<bot>/<room>/files")
+@logged
 def files_list_or_download(bot, room):
     creds, err = _authorized(bot, room)
     if err:
@@ -101,6 +121,7 @@ def files_list_or_download(bot, room):
 
 
 @bp.put("/nc/<bot>/<room>/files")
+@logged
 def files_upload(bot, room):
     creds, err = _authorized(bot, room)
     if err:
@@ -126,6 +147,7 @@ def files_upload(bot, room):
 
 
 @bp.delete("/nc/<bot>/<room>/files")
+@logged
 def files_delete(bot, room):
     creds, err = _authorized(bot, room)
     if err:
@@ -141,6 +163,7 @@ def files_delete(bot, room):
 
 
 @bp.get("/nc/<bot>/<room>/calendars")
+@logged
 def calendars(bot, room):
     creds, err = _authorized(bot, room)
     if err:
@@ -153,6 +176,7 @@ def calendars(bot, room):
 
 
 @bp.get("/nc/<bot>/<room>/calendars/<calid>")
+@logged
 def calendar_events(bot, room, calid):
     creds, err = _authorized(bot, room)
     if err:
@@ -172,6 +196,7 @@ def calendar_events(bot, room, calid):
 
 
 @bp.put("/nc/<bot>/<room>/calendars/<calid>")
+@logged
 def calendar_create(bot, room, calid):
     """New appointment from JSON: {title, start, end?, location?, ...}."""
     creds, err = _authorized(bot, room)
@@ -192,6 +217,7 @@ def calendar_create(bot, room, calid):
 
 
 @bp.delete("/nc/<bot>/<room>/calendars/<calid>/<uid>")
+@logged
 def calendar_delete(bot, room, calid, uid):
     creds, err = _authorized(bot, room)
     if err:
