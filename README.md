@@ -238,8 +238,18 @@ webhook message (pigeon stores the room's conversation token in
 ## Files
 
 ```
-app.py            the whole server (Flask, stdlib only otherwise)
-wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> app.startup())
+pigeon/
+  config.py       environment variables + logging
+  security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
+  room.py         room folders, .room.json (token + app password), /pw
+  nextcloud.py    bot API posting, WebDAV file download, CalDAV helpers
+  pi.py           pi config check, bubblewrap sandbox, JSONL run
+  tasks.py        per-room queues + workers, retries, heartbeat
+  scheduler.py    schedules.json time math + tick
+  skills.py       bundled skill sync into the pi home
+  nc_proxy.py     /nc routes: token-gated Nextcloud proxy for pi
+  web.py          Flask app: /, /health, /webhook/<bot>, startup/shutdown
+wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> pigeon.web.startup())
 skills/           pi skills mounted into the container (scheduler, austria-news, …)
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
@@ -261,7 +271,7 @@ python test/smoke.py   # starts fake Nextcloud + fake pi, exercises the full flo
 
 * Production server is **gunicorn** (single worker, threaded — pigeon keeps
   its state in process memory, so it runs with exactly one worker);
-  `python app.py` (Flask dev server) still works for local tinkering.
+  `python -m pigeon.web` (Flask dev server) still works for local tinkering.
 * The bot posts results as the bot identity via the signed bot API; it does
   not reply thread-style to the triggering message.
 * Message text is sent to pi verbatim as the prompt; there is no templating.

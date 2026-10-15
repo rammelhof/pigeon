@@ -10,7 +10,7 @@ heartbeat) in process memory, and post_fork runs startup() exactly once
 per worker — after gunicorn's own signal setup, so pigeon's fast-shutdown
 handler (kill active pi runs on SIGTERM) stays in charge.
 """
-from app import app, startup  # noqa: F401 (app is the WSGI object)
+from pigeon.web import app, startup  # noqa: F401 (app is the WSGI object)
 
 
 def post_fork(server, worker):

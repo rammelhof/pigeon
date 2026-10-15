@@ -14,7 +14,7 @@ server needs:
 | apt | `python3`, `python3-pip`, `git`, `ripgrep` | server runtime + tools pi uses |
 | `npm install -g @earendil-works/pi-coding-agent` | `pi` CLI | the agent |
 | pip | `flask`, `requests` | the webhook server |
-| copy | `app.py` | the server itself |
+| copy | `pigeon/`, `wsgi.py` | the server itself |
 
 Build:
 

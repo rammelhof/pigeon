@@ -1,0 +1,139 @@
+"""Pi invocation: config check, (sandboxed) command builder, JSONL run."""
+
+import json
+import os
+import shutil
+import subprocess
+import time
+
+from .config import (BOTS_DIR, PI_BIN, PI_CONFIG_DIR, SANDBOX, log)
+from .room import room_creds
+from .security import nc_token
+
+
+def pi_config_status():
+    """Pi is configured iff its default config files exist (auth.json from
+    /login, models.json for custom models/providers).
+    Returns (ok, path-or-dir)."""
+    for name in ("auth.json", "models.json"):
+        path = os.path.join(PI_CONFIG_DIR, name)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return True, path
+    return False, PI_CONFIG_DIR
+
+
+def pi_command(prompt, session_id, cwd, bot, room):
+    """Always run in the room's stable pi session: --session-id opens it
+    or creates it (first message of a new room). The working directory is
+    the room's workspace/ subfolder; when SANDBOX is on and bwrap exists,
+    the whole run is wrapped in a bubblewrap sandbox (full network)."""
+    pi = [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
+    ws = os.path.join(cwd, "workspace")
+    if not SANDBOX:
+        return pi
+
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        raise RuntimeError("SANDBOX=1 but bwrap not found — install "
+                           "bubblewrap or set SANDBOX=0")
+    # The sandbox root is a fresh tmpfs that only contains what is
+    # bound here — so in addition to the read-only tool belt, the
+    # merged-usr root symlinks must be recreated inside, or the
+    # dynamic linker (/lib64/...) is invisible and every exec fails.
+    flags = [
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/etc", "/etc",
+        "--ro-bind", "/var", "/var",
+        "--ro-bind", "/run", "/run",      # Docker DNS: /run/resolv.conf
+        "--ro-bind", "/sys", "/sys",
+        # merged-usr shims (in the container / these are symlinks)
+        "--symlink", "usr/lib64", "/lib64",
+        "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/bin", "/bin",
+        "--symlink", "usr/sbin", "/sbin",
+        # mask sensitive paths FIRST (empty, private to this
+        # sandbox): other rooms incl. their .room.json, pigeon's
+        # code. Ops are applied in order, so the writable binds
+        # below pierce the /bots mask at exactly the workspace
+        "--tmpfs", BOTS_DIR,
+        "--tmpfs", "/app",
+        # writable: this room's workspace + the pi home (sessions,
+        # skills, model credentials)
+        "--bind", ws, ws,
+        "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
+        # inherit NO environment (TALK_BOT_SECRET lives in
+        # gunicorn's) — set only what pi needs; HOME in the
+        # workspace keeps the room self-contained
+        "--clearenv",
+        "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+        "--setenv", "HOME", ws,
+        "--setenv", "LANG", "C.UTF-8",
+        # pi must still find auth.json/models.json/sessions
+        "--setenv", "PI_CODING_AGENT_DIR", PI_CONFIG_DIR,
+        # fresh tmp/dev/proc (pid namespace: /proc shows pi only)
+        "--tmpfs", "/tmp",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        # new PID/IPC/UTS namespaces, FULL network
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--die-with-parent",
+        "--chdir", ws]
+    # the room's 24h Nextcloud-proxy token (only when the room has an
+    # app password) — the proxy is pi's only door to Nextcloud.
+    # Last flag: bwrap stops parsing at the first non-option arg.
+    if room_creds(cwd) is not None:
+        flags += ["--setenv", "PIGEON_NC_TOKEN", nc_token(bot, room)]
+    return [bwrap] + flags + pi
+
+
+def extract_answer_and_thinking(task):
+    """Answer = text blocks of the LAST assistant message_end event.
+    Thinking was collected from the event stream into task['_thinking']."""
+    message = task["_last_message_end"].get("message", {})
+    thinking = "\n\n".join(task["_thinking"]).strip()
+    text_parts = []
+    for block in message.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text" \
+                and block.get("text"):
+            text_parts.append(block["text"])
+    answer = "\n\n".join(text_parts).strip()
+    return answer, thinking
+
+
+def run_pi_once(task):
+    """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
+    cmd = pi_command(task["message"], task["session_id"], task["cwd"],
+                     task["bot"], task["room_id"])
+    log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
+    proc = subprocess.Popen(cmd, cwd=task["workspace"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    task["proc"] = proc
+    task["started_at"] = time.time()
+
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        etype = event.get("type")
+        if etype == "message_end":
+            msg = event.get("message", {})
+            if msg.get("role") == "assistant":
+                task["_last_message_end"] = event
+                for block in msg.get("content") or []:
+                    if (isinstance(block, dict)
+                            and block.get("type") == "thinking"
+                            and block.get("thinking")):
+                        task["_thinking"].append(block["thinking"])
+    proc.wait()
+    stderr = (proc.stderr.read() or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(f"pi exited with {proc.returncode}: {stderr[:500]}")
+    task["proc"] = None
+    return extract_answer_and_thinking(task)

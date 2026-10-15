@@ -50,7 +50,7 @@ os.environ.update({
     "LOG_LEVEL": "INFO",
     "PORT": "8088",
 })
-# fake bwrap on PATH: app.py checks shutil.which("bwrap"); the command is
+# fake bwrap on PATH: pigeon/pi.py checks shutil.which("bwrap"); the command is
 # never actually executed (FakePopen replaces subprocess.Popen)
 FAKE_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fake-bin")
@@ -154,9 +154,13 @@ _nc = nc_stub.make_server(secret=SECRET)
 threading.Thread(target=_nc.serve_forever, daemon=True).start()
 
 # app ------------------------------------------------------------------------
-import app  # noqa: E402
+from pigeon.web import app, startup  # noqa: E402 (same app as gunicorn)
+from pigeon.security import nc_token, nc_verify  # noqa: E402
+from pigeon.tasks import requeue_stale  # noqa: E402
+from pigeon.scheduler import advance_next_run, initial_next_run  # noqa: E402
+from pigeon.skills import sync_skills  # noqa: E402
 import traceback  # noqa: E402
-app.startup()  # same init as the gunicorn post_fork hook
+startup()  # same init as the gunicorn post_fork hook
 from werkzeug.serving import run_simple  # noqa: E402
 
 
@@ -164,7 +168,7 @@ _PIGEON_PORT = int(os.environ.get("PIGEON_PORT", "8088"))
 
 def _serve():
     try:
-        run_simple("127.0.0.1", _PIGEON_PORT, app.app,
+        run_simple("127.0.0.1", _PIGEON_PORT, app,
                    use_reloader=False, threaded=True)
     except BaseException:
         traceback.print_exc()
@@ -474,7 +478,7 @@ s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
                                              room_name="Ncx"))
 check("/nc room pw set", s == 200 and body.get("handled") == "/pw", str(body))
 H = nc_stub.H
-tok = app._nc_token("bot1", "ncx")
+tok = nc_token("bot1", "ncx")
 auth = {"Authorization": "Bearer " + tok}
 
 c, _ = http("/nc/bot1/ncx/files")
@@ -548,7 +552,7 @@ tok_i = last.index("PIGEON_NC_TOKEN") if "PIGEON_NC_TOKEN" in last else -1
 run_tok = last[tok_i + 1] if tok_i >= 0 and tok_i + 1 < len(last) else ""
 check("pi run gets PIGEON_NC_TOKEN as the last bwrap flag (before pi)",
       tok_i >= 0 and last[tok_i - 1] == "--setenv"
-      and app._nc_verify(run_tok, "bot1", "ncx")
+      and nc_verify(run_tok, "bot1", "ncx")
       and last[tok_i + 2] == "fake-pi",
       str(last[tok_i - 1:tok_i + 3]))
 check("pi run uploads through the /nc proxy with the token",
@@ -653,7 +657,7 @@ with open(os.path.join(resume_dir, ".pigeon.json"), "w") as f:
                     "room": "resu4med", "started_at": time.time(),
                     "retries": 1, "task_id": "old-1"},
     }, f)
-resumed = app.requeue_stale()
+resumed = requeue_stale()
 t = wait_room_done("bot4/rooms/resumed-room", min_count=2)
 mine = [x for x in tasks()["tasks"]
         if "resumed-room" in x["room_cwd"].replace("\\", "/")]
@@ -745,49 +749,49 @@ def at(day, hh, mm):
     return int(datetime(2026, 10, day, hh, mm, tzinfo=VIE).timestamp())
 
 
-nxt = app._advance_next_run(win_entry, at(13, 21, 30))
+nxt = advance_next_run(win_entry, at(13, 21, 30))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("window: run after the end snaps to the next day's window start",
       (loc.day, loc.hour, loc.minute) == (14, 10, 0), str(loc))
-nxt = app._advance_next_run(win_entry, at(13, 15, 0))
+nxt = advance_next_run(win_entry, at(13, 15, 0))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("window: run inside the window advances by the interval",
       (loc.day, loc.hour, loc.minute) == (13, 16, 0), str(loc))
-nxt = app._initial_next_run(win_entry, at(13, 3, 0))
+nxt = initial_next_run(win_entry, at(13, 3, 0))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("window: initial next run before the window is the window start",
       (loc.day, loc.hour, loc.minute) == (13, 10, 0), str(loc))
-nxt = app._initial_next_run(win_entry, at(13, 11, 0))
+nxt = initial_next_run(win_entry, at(13, 11, 0))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("window: initial next run inside the window adds the interval",
       (loc.day, loc.hour, loc.minute) == (13, 12, 0), str(loc))
 no_win = {"prompt": "x", "every_minutes": 30}
-nxt = app._advance_next_run(no_win, at(13, 3, 0))
+nxt = advance_next_run(no_win, at(13, 3, 0))
 check("no window: plain interval runs around the clock",
       nxt == at(13, 3, 0) + 30 * 60, str(nxt))
 
 # 15. scheduler start_time anchor: runs on the start_time+N*interval phase
 anch = {"prompt": "x", "every_minutes": 15, "start_time": "10:30",
         "tz": "Europe/Vienna"}
-nxt = app._initial_next_run(anch, at(13, 10, 20))
+nxt = initial_next_run(anch, at(13, 10, 20))
 check("anchor: next run before the anchor is the anchor",
       (datetime.fromtimestamp(nxt, VIE).hour,
        datetime.fromtimestamp(nxt, VIE).minute) == (10, 30), str(nxt))
-nxt = app._advance_next_run(anch, at(13, 10, 31))
+nxt = advance_next_run(anch, at(13, 10, 31))
 check("anchor: run advances to the next phase step",
       (datetime.fromtimestamp(nxt, VIE).hour,
        datetime.fromtimestamp(nxt, VIE).minute) == (10, 45), str(nxt))
-nxt = app._advance_next_run(anch, at(13, 23, 59))
+nxt = advance_next_run(anch, at(13, 23, 59))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("anchor: after end of day the phase continues next day",
       (loc.day, loc.hour, loc.minute) == (14, 10, 30), str(loc))
 anch_win = {"prompt": "x", "every_minutes": 70, "start_time": "10:00",
             "window": {"start": "10:00", "end": "12:00", "tz": "Europe/Vienna"}}
-nxt = app._advance_next_run(anch_win, at(13, 10, 0))
+nxt = advance_next_run(anch_win, at(13, 10, 0))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("anchor+window: in-window phase step is kept (10:00 -> 11:10)",
       (loc.day, loc.hour, loc.minute) == (13, 11, 10), str(loc))
-nxt = app._advance_next_run(anch_win, at(13, 11, 11))
+nxt = advance_next_run(anch_win, at(13, 11, 11))
 loc = datetime.fromtimestamp(nxt, VIE)
 check("anchor+window: out-of-window steps skipped (12:20 -> next day 10:00)",
       (loc.day, loc.hour, loc.minute) == (14, 10, 0), str(loc))
@@ -810,12 +814,12 @@ def put_skill(name, body):
 
 
 put_skill("bundled-a", "v1")
-n = app.sync_skills(src=skills_src, dest=skills_dest)
+n = sync_skills(src=skills_src, dest=skills_dest)
 check("sync_skills copies bundled skills into the pi config",
       n == 1 and open(os.path.join(skills_dest, "bundled-a", "SKILL.md")).read() == "v1")
 put_skill("bundled-a", "v2")
 put_skill("bundled-b", "new")
-app.sync_skills(src=skills_src, dest=skills_dest)
+sync_skills(src=skills_src, dest=skills_dest)
 check("sync_skills updates changed skills on next start",
       open(os.path.join(skills_dest, "bundled-a", "SKILL.md")).read() == "v2"
       and os.path.exists(os.path.join(skills_dest, "bundled-b", "SKILL.md")))
