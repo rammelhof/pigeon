@@ -23,10 +23,11 @@ class H(BaseHTTPRequestHandler):
     file_bytes = b"FAKE-IMAGE-BYTES-1234"
     # /nc proxy store: WebDAV files {path: bytes}, CalDAV calendars+events
     files = {"temp/notes.txt": b"hello nextcloud"}
-    calendars = {"family": "Family", "work": "Work"}
+    calendars = {"family": "Family", "work": "Work", "privat": "Privat",
+                 "Privat (2)": "Privat2"}
     events = {"family": [{"uid": "ev1", "summary": "Old thing",
                           "start": "2000-01-01T08:00:00+01:00"}],
-               "work": []}
+               "work": [], "privat": [], "Privat (2)": []}
     put_calls = []  # (method, path) for the /nc proxy tests
 
     def _json(self, obj, code=200):

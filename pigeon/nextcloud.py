@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
 
 import requests
 
@@ -215,9 +216,31 @@ def caldav_calendars(creds):
             r.text, re.S):
         url = m.group(1)
         out.append({"name": m.group(2).strip(),
-                    "id": url.rstrip("/").rsplit("/", 1)[-1] if "/" in url
-                    else ""})
+                    "id": unquote(url.rstrip("/").rsplit("/", 1)[-1])
+                    if "/" in url else ""})
     return out
+
+
+def caldav_resolve(creds, calid):
+    """calid (id or name, case-insensitive) -> the real calendar id.
+    Nextcloud ids are not guessable and users think in names, so accept
+    both. Raises UnknownCalendar (with the full list) on no match."""
+    cals = caldav_calendars(creds)
+    low = calid.lower()
+    for c in cals:
+        if low in (c["id"].lower(), c["name"].lower()):
+            return c["id"]
+    raise UnknownCalendar(calid, cals)
+
+
+class UnknownCalendar(RuntimeError):
+    """calid matches no calendar; .calendars is the full [{name, id}]."""
+
+    def __init__(self, calid, calendars):
+        self.calid = calid
+        self.calendars = calendars
+        names = ", ".join(f"{c['name']} ({c['id']})" for c in calendars)
+        super().__init__(f"unknown calendar {calid!r}; available: {names}")
 
 
 def _ics_dt(value):
@@ -265,6 +288,7 @@ def caldav_events(creds, calid, t_from, t_to):
     (RFC3339 in). Fetches the whole calendar (GET) and filters locally —
     a universally supported operation; Nextcloud's calendar-query REPORT
     returns HTTP 500 in many versions."""
+    calid = caldav_resolve(creds, calid)
     r = requests.get(f"{caldav_base(creds[0])}/{calid}/", auth=creds,
                      headers={"Accept": "text/calendar"}, timeout=60)
     if r.status_code != 200:
@@ -301,6 +325,7 @@ def caldav_events(creds, calid, t_from, t_to):
 def caldav_create(creds, calid, spec):
     """spec (JSON: title/start/end/location/description/attendees) -> ICS PUT.
     Returns the event UID."""
+    calid = caldav_resolve(creds, calid)
     uid = uuid.uuid4().hex
 
     def dt(s):

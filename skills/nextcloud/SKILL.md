@@ -52,7 +52,9 @@ report the error:
 | create appointment | `curl -sf ... -X PUT -H 'Content-Type: application/json' -d '{"title":"r: Training","start":"2026-10-15T10:00:00+02:00"}' "/nc/$BOT/$ROOM/calendars/<id>"` |
 | delete appointment | `curl -sf ... -X DELETE "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` |
 
-* Pick the calendar by **name** from the list (e.g. "family" → its `id`).
+* `calid` accepts the calendar **id or its display name**, any casing —
+  the proxy resolves it. If it still can't resolve it, the 404 error body
+  contains the full `calendars` list: pick the right one from there.
 * `start`/`end` are RFC 3339 — include the user's timezone offset when they
   give a local time. Without `end`, the appointment is all-day/zero-length.
 * The create response contains the `uid` — mention it only if the user asks

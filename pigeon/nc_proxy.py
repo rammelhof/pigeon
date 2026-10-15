@@ -23,8 +23,9 @@ import requests
 from flask import Blueprint, Response, jsonify, request
 
 from .config import BOTS_DIR, MAX_FILE_SIZE_MB, NEXTCLOUD_URL, log
-from .nextcloud import (caldav_base, caldav_calendars, caldav_create,
-                        caldav_events, dav_path, dav_prop)
+from .nextcloud import (UnknownCalendar, caldav_base, caldav_calendars,
+                        caldav_create, caldav_events, caldav_resolve,
+                        dav_path, dav_prop)
 from .room import ROOM_DIR_RE, room_creds
 from .security import nc_verify
 
@@ -175,13 +176,18 @@ def calendars(bot, room):
         return jsonify({"error": str(e)}), 502
 
 
+def _unknown(e):
+    """404 for an unresolvable calendar id, with the list to choose from."""
+    return jsonify({"error": str(e), "calendars": e.calendars}), 404
+
+
 @bp.get("/nc/<bot>/<room>/calendars/<calid>")
 @logged
 def calendar_events(bot, room, calid):
     creds, err = _authorized(bot, room)
     if err:
         return err
-    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,200}", calid):
+    if not re.fullmatch(r"[^/?#&<>]{1,300}", calid):
         return jsonify({"error": "bad calendar id"}), 400
     t_from = request.args.get("from") or \
         datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -190,6 +196,8 @@ def calendar_events(bot, room, calid):
     try:
         return jsonify({"calendar": calid, "events":
                         caldav_events(creds, calid, t_from, t_to)})
+    except UnknownCalendar as e:
+        return _unknown(e)
     except Exception as e:
         log.warning("nc events failed: %s", e)
         return jsonify({"error": str(e)}), 502
@@ -202,13 +210,15 @@ def calendar_create(bot, room, calid):
     creds, err = _authorized(bot, room)
     if err:
         return err
-    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,200}", calid):
+    if not re.fullmatch(r"[^/?#&<>]{1,300}", calid):
         return jsonify({"error": "bad calendar id"}), 400
     spec = request.get_json(silent=True) or {}
     if not spec.get("title") or not spec.get("start"):
         return jsonify({"error": "title and start are required"}), 400
     try:
         uid = caldav_create(creds, calid, spec)
+    except UnknownCalendar as e:
+        return _unknown(e)
     except Exception as e:
         log.warning("nc appointment failed: %s", e)
         return jsonify({"error": str(e)}), 502
@@ -222,11 +232,15 @@ def calendar_delete(bot, room, calid, uid):
     creds, err = _authorized(bot, room)
     if err:
         return err
-    if not (re.fullmatch(r"[A-Za-z0-9_:-]{1,200}", calid)
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", calid)
             and re.fullmatch(r"[A-Za-z0-9._-]{1,200}", uid)):
         return jsonify({"error": "bad calendar id or uid"}), 400
-    r = requests.delete(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
-                        auth=creds, timeout=30)
+    try:
+        calid = caldav_resolve(creds, calid)
+        r = requests.delete(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
+                            auth=creds, timeout=30)
+    except UnknownCalendar as e:
+        return _unknown(e)
     if r.status_code not in (200, 204):
         return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
     return jsonify({"ok": True, "uid": uid})

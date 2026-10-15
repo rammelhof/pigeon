@@ -534,7 +534,29 @@ check("/nc delete removes the file",
 c, b = http("/nc/bot1/ncx/calendars", headers=auth)
 check("/nc lists calendars (CalDAV PROPFIND)",
       c == 200 and {x["name"] for x in b.get("calendars", [])}
-      == {"Family", "Work"}, str(b))
+      == {"Family", "Work", "Privat", "Privat2"}, str(b))
+c, b = http("/nc/bot1/ncx/calendars/Privat2?from=2026-10-15T00:00:00Z"
+            "&to=2026-10-15T23:59:59Z", headers=auth)
+check("/nc calendar with a special id (space/parens) works by name",
+      c == 200 and b.get("events") == [], str(b)[:200])
+H.events["family"].append({"uid": "ev2", "summary": "In range",
+                           "start": "2026-10-15T09:00:00Z"})
+c, b = http("/nc/bot1/ncx/calendars/FAMILY?from=2026-10-15T00:00:00Z"
+            "&to=2026-10-15T23:59:59Z", headers=auth)
+check("/nc resolves a calendar by display name, case-insensitively",
+      c == 200 and [e.get("summary") for e in b.get("events", [])]
+      == ["In range"], str(b)[:200])
+H.events["family"].pop()
+c, b = http("/nc/bot1/ncx/calendars/nope", headers=auth)
+check("/nc unknown calendar: 404 with the list to choose from",
+      c == 404 and "unknown calendar" in b.get("error", "")
+      and {x["id"] for x in b.get("calendars", [])} == {"family", "work",
+                                                        "privat",
+                                                        "Privat (2)"},
+      str(b))
+c, b = http("/nc/bot1/ncx/calendars/nope/ev1", method="DELETE", headers=auth)
+check("/nc delete with unknown calendar: 404 with the list",
+      c == 404 and "calendars" in b, str(b))
 c, b = http("/nc/bot1/ncx/calendars/family",
             body=json.dumps({"title": "r: Training",
                              "start": "2026-10-15T10:00:00+02:00",
