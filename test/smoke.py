@@ -370,6 +370,8 @@ def file_payload(message, room_token, room_name,
                  file_id=65890, name="starwars-r2-d2.webp",
                  mimetype="image/webp"):
     p = new_payload(message, room_token=room_token, room_name=room_name)
+    # real Talk sends file events with object.name == "file_shared"
+    p["object"]["name"] = "file_shared"
     p["object"]["content"] = json.dumps({"message": message,
         "parameters": {"file": {"type": "file", "id": str(file_id),
                                 "name": name, "size": "9616",

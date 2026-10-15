@@ -95,7 +95,7 @@ def parse_payload(payload):
         room_token = target.get("id") or ""
         if not re.fullmatch(r"[a-z0-9]{4,30}", room_token):
             return None
-        if obj.get("name") != "message":
+        if obj.get("name") not in ("message", "file_shared"):
             return None  # ignore reactions, management events, ...
         try:
             content = json.loads(obj.get("content") or "{}")
