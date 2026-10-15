@@ -87,4 +87,4 @@ EXPOSE 8080
 # production WSGI server; single worker (in-process state), threaded
 # -c python:wsgi registers wsgi.post_fork (gunicorn only picks hooks up
 # from a -c config module, never from the WSGI module itself)
-CMD ["/app/.venv/bin/gunicorn", "-c", "python:wsgi", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "32", "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]
+CMD ["/app/.venv/bin/gunicorn", "-c", "python:wsgi", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "32", "--error-logfile", "-", "wsgi:app"]
