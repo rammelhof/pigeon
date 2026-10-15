@@ -22,7 +22,7 @@ class H(BaseHTTPRequestHandler):
     dav_href = "/remote.php/dav/files/ncuser/Talk/demo/file.webp"
     file_bytes = b"FAKE-IMAGE-BYTES-1234"
     # /nc proxy store: WebDAV files {path: bytes}, CalDAV calendars+events
-    files = {"temp/notes.txt": b"hello nextcloud"}
+    files = {"Temp/notes.txt": b"hello nextcloud"}  # capital T, like real NC
     calendars = {"family": "Family", "work": "Work", "privat": "Privat",
                  "Privat (2)": "Privat2"}
     events = {"family": [{"uid": "ev1", "summary": "Old thing",
@@ -34,6 +34,19 @@ class H(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _xml_error(self, message):
+        # like real sabre: XML 404 NotFound, not JSON
+        body = ('<?xml version="1.0" encoding="utf-8"?>'
+                '<d:error xmlns:d="DAV:" '
+                'xmlns:s="http://sabredav.org/ns">'
+                '<s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception>'
+                f"<s:message>{message}</s:message></d:error>").encode()
+        self.send_response(404)
+        self.send_header("Content-Type", "application/xml; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -195,13 +208,32 @@ class H(BaseHTTPRequestHandler):
                            '</d:propstat></d:response>'
                            for e in H.events.get(cal, []))
                        + "</d:multistatus>")
-        else:  # webdav dir listing
-            root = self.path[len("/remote.php/webdav/"):] .rstrip("/")
+        else:  # webdav dir listing: direct children (files + folders)
+            root = self.path[len("/remote.php/webdav/"):].rstrip("/")
+            under = [p for p in sorted(H.files)
+                     if not root or p.startswith(root + "/")]
+            if root and not under:
+                # real sabre: unknown dir -> 404 NotFound
+                self._xml_error(f'File with name {root} could not be located')
+                return
+            dirs, files = set(), []
+            for p in under:
+                rest = p[len(root) + 1:] if root else p
+                first, _, after = rest.partition("/")
+                if after:
+                    dirs.add(first)
+                else:
+                    files.append((first, p))
             resp = []
-            for p in sorted(H.files):
-                if root and not p.startswith(root + "/"):
-                    continue
-                name = p.rsplit("/", 1)[-1]
+            for name in sorted(dirs):
+                resp.append(
+                        f"<d:response><d:href>/remote.php/webdav/{root + '/' if root else ''}{name}/"
+                        f"</d:href><d:propstat><d:prop>"
+                        f"<d:displayname>{name}</d:displayname>"
+                        f"<d:resourcetype><d:collection/></d:resourcetype>"
+                        f"</d:prop><d:status>HTTP/1.1 200 OK</d:status>"
+                        f"</d:propstat></d:response>")
+            for name, p in files:
                 resp.append(
                         f"<d:response><d:href>/remote.php/webdav/{p}"
                         f"</d:href><d:propstat><d:prop>"

@@ -25,23 +25,20 @@ this room — do not try to work around it.
 | upload | `curl -sf ... -X PUT --data-binary @doc.md "/nc/$BOT/$ROOM/files?path=temp/doc.md"` |
 | delete | `curl -sf ... -X DELETE "/nc/$BOT/$ROOM/files?path=temp/doc.md"` |
 
-Paths are relative to the user's Nextcloud root (`""` = root). To **edit a
-Nextcloud file**: download it, edit it locally, upload it back.
+Paths are relative to the user's Nextcloud root (`""` = root). The list
+answer is `{"path": ..., "entries": [{name, path, type, size, modified}]}`
+— **both folders and files** (`type` = `dir` or `file`); use each entry's
+`path` in your next request. To **edit a Nextcloud file**: download it,
+edit it locally, upload it back.
 
 ### Case sensitivity
 
-Nextcloud file and folder names are **case-sensitive** (`Docs` ≠ `docs`),
-but users usually don't know that. If a request fails with an error
-containing `HTTP 404` (e.g. `{"error": "download: HTTP 404"}`), don't just
-report the error:
-
-1. list the **parent folder** (the path without the last segment),
-2. look for an entry with the same name in different capitalization
-   (e.g. the user said `berichte/2026` but the listing has `Berichte/`),
-3. use the exact name from the listing in all following requests — and
-   tell the user what you did ("the folder is called `Berichte`, I used
-   that"). If several candidates match or nothing matches, propose the
-   closest candidates and ask the user which one they meant.
+Nextcloud paths are **case-sensitive** (`Docs` ≠ `docs`), but the proxy
+matches them case-insensitively (list, download, upload, delete) — if the
+user says `temp` and the folder is `Temp`, it still works; mention the
+exact name when you report what you found. If a path is still not found
+(`404 not found`), list the parent folder and propose the closest
+candidates — ask the user which one they meant if it is ambiguous.
 
 ## Calendar
 
@@ -66,6 +63,6 @@ report the error:
 
 - Never print, store or echo the token.
 - Never invent a Nextcloud URL — the proxy is the only way.
-- On `HTTP 404` from a file request: scan the parent folder for a
-  case-variant of the name before reporting failure (see above).
+- On `404 not found` from a file request: scan the parent folder and
+  propose the closest candidates before giving up (see above).
 - When the proxy fails, report the error to the user in their language.

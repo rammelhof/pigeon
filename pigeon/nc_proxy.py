@@ -72,6 +72,62 @@ def _authorized(bot, room):
     return creds, None
 
 
+def _propfind(rel, creds):
+    """PROPFIND directory `rel` (relative to the NC root). Returns
+    (entries, status). entries: [{name, path, type, size, modified}]
+    for the directory's direct children — files AND folders
+    (type 'dir' / 'file'), path relative like `rel`."""
+    prop = ("<prop xmlns:d='DAV:'><d:displayname/><d:getcontentlength/>"
+            "<d:getlastmodified/><d:resourcetype/></prop>")
+    body = f"<?xml version='1.0'?><d:propfind xmlns:d='DAV:'>{prop}</d:propfind>"
+    r = requests.request("PROPFIND", NEXTCLOUD_URL + dav_path(rel) + "/",
+                         auth=creds, data=body.encode(),
+                         headers={"Depth": "1",
+                                  "Content-Type": "text/xml"}, timeout=30)
+    _dbg(r, f"PROPFIND /{rel.strip('/')}/")
+    here = dav_path(rel).rstrip("/")  # the directory itself, excluded
+    entries = []
+    for m in re.finditer(
+            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
+            r.text, re.S):
+        href, blk = m.group(1), m.group(2)
+        if href.rstrip("/") == here:
+            continue
+        name = href.rstrip("/").rsplit("/", 1)[-1]
+        entries.append({
+            "name": name,
+            "path": (rel.strip("/") + "/" + name) if rel.strip("/") else name,
+            "type": "dir" if "<d:collection" in blk else "file",
+            "size": int(dav_prop(blk, "getcontentlength") or 0),
+            "modified": dav_prop(blk, "getlastmodified"),
+        })
+    return entries, r.status_code
+
+
+def _resolve(rel, creds):
+    """Resolve a path segment by segment against the live listings.
+    Each segment: exact match first, then case-insensitive — Nextcloud
+    paths are case-sensitive, but users and bots are not.
+    Returns (resolved_rel, last_entry) or (None, None) if any
+    segment doesn't exist."""
+    cur, last = "", None
+    for seg in [s for s in (rel or "").split("/") if s]:
+        entries, status = _propfind(cur, creds)
+        if status not in (200, 207):
+            return None, None
+        e = next((x for x in entries if x["name"] == seg), None)
+        if e is None:
+            e = next((x for x in entries
+                      if x["name"].lower() == seg.lower()), None)
+        if e is None:
+            return None, None
+        if e["name"] != seg:
+            log.info("nc: case-corrected %r -> %r", seg, e["name"])
+        cur = (cur + "/" + e["name"]) if cur else e["name"]
+        last = e
+    return cur, last
+
+
 @bp.get("/nc/<bot>/<room>/files")
 @logged
 def files_list_or_download(bot, room):
@@ -84,8 +140,11 @@ def files_list_or_download(bot, room):
         return jsonify({"error": "bad path"}), 400
 
     if request.args.get("download"):
-        with requests.get(NEXTCLOUD_URL + url, auth=creds, stream=True,
-                          timeout=(10, 600)) as r:
+        resolved, entry = _resolve(rel, creds)
+        if entry is None or entry["type"] != "file":
+            return jsonify({"error": f"not found: {rel}"}), 404
+        with requests.get(NEXTCLOUD_URL + dav_path(resolved),
+                          auth=creds, stream=True, timeout=(10, 600)) as r:
             if r.status_code >= 400:
                 return jsonify({"error": f"download: HTTP {r.status_code}"}), 502
             data = r.raw.read(MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
@@ -93,33 +152,28 @@ def files_list_or_download(bot, room):
             return jsonify({"error": "file too large"}), 413
         return Response(data, mimetype=r.headers.get("Content-Type"),
                         headers={"Content-Disposition":
-                                 f'attachment; filename="{os.path.basename(rel)}"'})
+                                 f'attachment; filename="{entry["name"]}"'})
 
-    prop = ("<prop xmlns:d='DAV:'><d:displayname/><d:getcontentlength/>"
-            "<d:getlastmodified/><d:resourcetype/></prop>")
-    body = f"<?xml version='1.0'?><d:propfind xmlns:d='DAV:'>{prop}</d:propfind>"
-    r = requests.request("PROPFIND", NEXTCLOUD_URL + url + "/",
-                         auth=creds, data=body.encode(),
-                         headers={"Depth": "1",
-                                  "Content-Type": "text/xml"}, timeout=30)
-    _dbg(r, f"PROPFIND {url}/")
-    if r.status_code not in (200, 207):
-        return jsonify({"error": f"list: HTTP {r.status_code}"}), 502
-    files = []
-    for m in re.finditer(
-            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
-            r.text, re.S):
-        href, blk = m.group(1), m.group(2)
-        if "<d:collection" in blk:
-            continue
-        name = href.rstrip("/").rsplit("/", 1)[-1]
-        files.append({
-            "name": name,
-            "path": rel + "/" + name if rel else name,
-            "size": int(dav_prop(blk, "getcontentlength") or 0),
-            "modified": dav_prop(blk, "getlastmodified"),
-        })
-    return jsonify({"path": rel, "files": files})
+    entries, status = _propfind(rel, creds)
+    if status == 404 and rel:  # wrong case somewhere? resolve it
+        resolved, last = _resolve(rel, creds)
+        if last is not None:
+            rel, (entries, status) = resolved, _propfind(resolved, creds)
+    if status not in (200, 207):
+        return jsonify({"error": f"list: HTTP {status}"}), 502
+    return jsonify({"path": rel, "entries": entries})
+
+
+def _resolved_parent(rel, creds):
+    """rel minus its last segment, case-resolved; None if not found."""
+    parent = rel.rpartition("/")[0]
+    if not parent:
+        return rel  # top-level file: nothing to resolve
+    resolved, last = _resolve(parent, creds)
+    if last is None:
+        return None
+    return (resolved + "/" + rel.rpartition("/")[2]) if resolved else \
+        rel.rpartition("/")[2]
 
 
 @bp.put("/nc/<bot>/<room>/files")
@@ -134,6 +188,8 @@ def files_upload(bot, room):
         return jsonify({"error": "bad path"}), 400
     if not rel or rel.endswith("/"):
         return jsonify({"error": "path must include a file name"}), 400
+    rel = _resolved_parent(rel, creds) or rel
+    url = dav_path(rel)
     cap = int(MAX_FILE_SIZE_MB * 1024 * 1024)
     length = int(request.headers.get("Content-Length") or 0)
     if length > cap:
@@ -158,6 +214,8 @@ def files_delete(bot, room):
     url = dav_path(rel)
     if url is None:
         return jsonify({"error": "bad path"}), 400
+    rel = _resolved_parent(rel, creds) or rel
+    url = dav_path(rel)
     r = requests.delete(NEXTCLOUD_URL + url, auth=creds, timeout=30)
     if r.status_code not in (200, 204):
         return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502

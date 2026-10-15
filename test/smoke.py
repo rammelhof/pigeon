@@ -515,22 +515,31 @@ check("/nc without token: 401", c == 401, str(c))
 c, _ = http("/nc/bot1/ncx/files", headers={"Authorization": "Bearer deadbeef00000000"})
 check("/nc with foreign token: 401", c == 401, str(c))
 c, b = http("/nc/bot1/ncx/files", headers=auth)
-check("/nc list root shows the stub file", c == 200
-      and any(f["name"] == "notes.txt" for f in b.get("files", [])), str(b))
+check("/nc list root shows the stub folder", c == 200
+      and any(e["name"] == "Temp" and e["type"] == "dir"
+              for e in b.get("entries", [])), str(b))
+c, b = http("/nc/bot1/ncx/files?path=Temp", headers=auth)
+check("/nc list folder shows the stub file", c == 200
+      and any(e["name"] == "notes.txt" and e["type"] == "file"
+              for e in b.get("entries", [])), str(b))
+c, b = http("/nc/bot1/ncx/files?path=temp", headers=auth)
+check("/nc list case-corrects a folder (temp -> Temp)",
+      c == 200 and b.get("path") == "Temp"
+      and any(e["name"] == "notes.txt" for e in b.get("entries", [])), str(b))
 c, b = http("/nc/bot1/ncx/files?path=temp%2Ffrom-pi.txt",
             body=b"proxy upload test", method="PUT",
             headers={**auth, "Content-Type": "text/plain"})
 check("/nc upload (PUT) stored via WebDAV with the room creds",
       c == 201 and b.get("bytes") == len(b"proxy upload test")
-      and H.files.get("temp/from-pi.txt") == b"proxy upload test",
+      and H.files.get("Temp/from-pi.txt") == b"proxy upload test",
       str(b) + str(list(H.files)))
 c, b = http("/nc/bot1/ncx/files?path=temp%2Fnotes.txt&download=1", headers=auth)
-check("/nc download streams the file bytes",
+check("/nc download resolves the case (temp/notes.txt -> Temp/notes.txt)",
       c == 200 and b == b"hello nextcloud", repr(b)[:60])
 c, b = http("/nc/bot1/ncx/files?path=temp%2Ffrom-pi.txt", method="DELETE",
             headers=auth)
 check("/nc delete removes the file",
-      c == 200 and "temp/from-pi.txt" not in H.files, str(b))
+      c == 200 and "Temp/from-pi.txt" not in H.files, str(b))
 c, b = http("/nc/bot1/ncx/calendars", headers=auth)
 check("/nc lists calendars (CalDAV PROPFIND)",
       c == 200 and {x["name"] for x in b.get("calendars", [])}
@@ -610,7 +619,7 @@ check("pi run gets PIGEON_NC_TOKEN as the last bwrap flag (before pi)",
       and last[tok_i + 2] == "fake-pi",
       str(last[tok_i - 1:tok_i + 3]))
 check("pi run uploads through the /nc proxy with the token",
-      H.files.get("temp/fake-pi-upload.txt") == b"hello from sandboxed pi",
+      H.files.get("Temp/fake-pi-upload.txt") == b"hello from sandboxed pi",
       str(list(H.files)))
 
 # 4e. wrong credentials -> failure hint + share link, task still runs
