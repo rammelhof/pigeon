@@ -107,6 +107,11 @@ def run_pi_once(task):
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
                      task["bot"], task["room_id"])
     log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
+    # the full prompt (which may be a batched multi-message one) is only
+    # interesting for debugging — keep it at debug level
+    log.debug("task %s: prompt for session %s (room %s):\n%s",
+              task["id"], task["session_id"], task["room_id"],
+              task["message"])
     proc = subprocess.Popen(cmd, cwd=task["workspace"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, start_new_session=True)
