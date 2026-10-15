@@ -159,6 +159,7 @@ from pigeon.security import nc_token, nc_verify  # noqa: E402
 from pigeon.tasks import requeue_stale  # noqa: E402
 from pigeon.scheduler import advance_next_run, initial_next_run  # noqa: E402
 from pigeon.skills import sync_skills  # noqa: E402
+from pigeon.pi import session_dir  # noqa: E402
 import traceback  # noqa: E402
 startup()  # same init as the gunicorn post_fork hook
 from werkzeug.serving import run_simple  # noqa: E402
@@ -402,6 +403,34 @@ signed_webhook("bot1", new_payload("/pw", room_token="pwroom0001",
 posted = [m for room, m in nc_stub.H.received if room == "pwroom0001"]
 check("/pw status reply: configured",
       any("configured for user: ncuser" in m for m in posted),
+      str(posted)[:200])
+
+# 4b2. /clean room command: drops the room's pi session files, so the
+# next message starts a fresh pi session
+clean_ws = os.path.join(BOTS_TEST, "bot1", "rooms", "clean-room",
+                        "workspace")
+sdir = session_dir(clean_ws)
+os.makedirs(sdir, exist_ok=True)
+old_session = os.path.join(sdir, "2026-01-01T00-00-00Z_bot1_clean-room.jsonl")
+with open(old_session, "w") as f:
+    f.write('{"type":"session","version":3}\n')
+s, body = signed_webhook("bot1", new_payload("/clean",
+                                             room_token="cleanrm0001",
+                                             room_name="Clean Room"))
+check("/clean: handled, not queued",
+      s == 200 and body.get("handled") == "/clean", str(body))
+check("/clean deleted the old pi session file",
+      not os.path.exists(old_session) and os.path.isdir(sdir))
+posted = [m for r, m in nc_stub.H.received if r == "cleanrm0001"]
+check("/clean reply posted", any("cleared" in m for m in posted),
+      str(posted)[:200])
+s, body = signed_webhook("bot1", new_payload("/clean",
+                                             room_token="cleanrm0001",
+                                             room_name="Clean Room"))
+posted = [m for r, m in nc_stub.H.received if r == "cleanrm0001"]
+check("/clean twice: nothing to clear",
+      body.get("handled") == "/clean" and any("nothing to clear" in m
+                                              for m in posted),
       str(posted)[:200])
 
 # 4c. file message without app password -> pi is instructed (user language)
@@ -817,6 +846,10 @@ put_skill("bundled-a", "v1")
 n = sync_skills(src=skills_src, dest=skills_dest)
 check("sync_skills copies bundled skills into the pi config",
       n == 1 and open(os.path.join(skills_dest, "bundled-a", "SKILL.md")).read() == "v1")
+check("container-tools skill ships with the repo",
+      os.path.exists(os.path.join(ROOT, "skills", "container-tools", "SKILL.md"))
+      and "container-tools" in open(
+          os.path.join(ROOT, "skills", "container-tools", "SKILL.md")).read())
 put_skill("bundled-a", "v2")
 put_skill("bundled-b", "new")
 sync_skills(src=skills_src, dest=skills_dest)

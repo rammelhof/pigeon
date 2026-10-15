@@ -80,6 +80,9 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   periodically by the state scan — pigeon re-queues them, so no message
   is lost in a restart or crash; and since every room always runs in its
   stable pi session, context survives too.
+* **Fresh context on demand**: send `/clean` in a room to delete its pi
+  session files (intercepted by pigeon, like `/pw`) — the next message
+  then starts a clean pi session with no old history.
 * **Skills & scheduled tasks**: pi skills bundled in the image are copied
   into `$PI_CODING_AGENT_DIR/skills` (the `pi-home` volume) at every start
   — bundled ones are updated, your own are kept. The `scheduler` skill

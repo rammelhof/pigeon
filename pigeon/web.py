@@ -19,7 +19,7 @@ from . import nc_proxy, scheduler, skills, tasks
 from .config import (BOTS_DIR, COMMIT, HEARTBEAT_INTERVAL, PI_CONFIG_DIR,
                      TALK_BOT_SECRET, VERSION, log)
 from .nextcloud import apply_file_param, payload_file_param, post_message
-from .pi import pi_config_status
+from .pi import delete_session, pi_config_status
 from .room import BOT_NAME_RE, folder_for_room, handle_pw_command, \
     room_dir, write_room_token
 from .security import verify_webhook_signature
@@ -118,6 +118,16 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "/pw"}), 200
+
+    # room command: /clean -> drop the room's pi session files, so the
+    # next message starts a fresh session (no old history in the context)
+    if message == "/clean":
+        n = delete_session(f"{bot}_{folder}", os.path.join(cwd, "workspace"))
+        post_message(room,
+                     "\u2705 pi session cleared \u2014 the next message starts "
+                     "a fresh pi session" if n else
+                     "no pi session in this room yet \u2014 nothing to clear")
+        return jsonify({"handled": "/clean"}), 200
 
     configured, config_file = pi_config_status()
     if not configured:

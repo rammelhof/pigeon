@@ -1,5 +1,6 @@
 """Pi invocation: config check, (sandboxed) command builder, JSONL run."""
 
+import glob
 import json
 import os
 import shutil
@@ -86,6 +87,31 @@ def pi_command(prompt, session_id, cwd, bot, room):
     if room_creds(cwd) is not None:
         flags += ["--setenv", "PIGEON_NC_TOKEN", nc_token(bot, room)]
     return [bwrap] + flags + pi
+
+
+def session_dir(workspace):
+    """Pi stores a session per working directory:
+    $PI_CODING_AGENT_DIR/sessions/--<cwd, / \\ : -> -->/<ts>_<session-id>.jsonl
+    (see pi docs, session-format.md). This maps the room workspace to that
+    subfolder; pi is started with exactly this workspace as cwd."""
+    rel = os.path.abspath(workspace)
+    if rel.startswith("/"):
+        rel = rel[1:]  # pi drops the leading path separator
+    rel = rel.replace("/", "-").replace("\\", "-").replace(":", "-")
+    return os.path.join(PI_CONFIG_DIR, "sessions", "--" + rel + "--")
+
+
+def delete_session(session_id, workspace):
+    """Delete all session files of one pi session, so the next message
+    starts a clean new session (no old history in the context).
+    Returns the number of files removed."""
+    d = session_dir(workspace)
+    if not os.path.isdir(d):
+        return 0
+    files = glob.glob(os.path.join(d, f"*_{session_id}.jsonl"))
+    for f in files:
+        os.remove(f)
+    return len(files)
 
 
 def extract_answer_and_thinking(task):
