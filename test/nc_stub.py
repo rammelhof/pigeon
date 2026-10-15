@@ -29,21 +29,6 @@ class H(BaseHTTPRequestHandler):
                "work": []}
     put_calls = []  # (method, path) for the /nc proxy tests
 
-    @staticmethod
-    def _dt(s):
-        """dt variants we deal with -> comparable UTC string"""
-        import datetime as _d
-        s = s.strip()
-        try:
-            if s.endswith("Z"):
-                s = s[:-1] + "+00:00"
-            dt = _d.datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_d.timezone.utc)
-            return dt.astimezone(_d.timezone.utc).strftime("%Y%m%d%H%M%S")
-        except ValueError:
-            return re.sub(r"[-:]", "", s.replace("Z", ""))[:15]
-
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -95,6 +80,24 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path.startswith("/remote.php/dav/calendars/"):
+            if not self._dav_ok():
+                self._json({"error": "unauthorized"}, code=401)
+                return
+            H.put_calls.append(("GET", self.path))
+            cal = self.path.rstrip("/").rsplit("/", 1)[-1]
+            ics = ("BEGIN:VCALENDAR\r\n" + "".join(
+                "BEGIN:VEVENT\r\nUID:%s\r\nSUMMARY:%s\r\n"
+                "DTSTART:%s\r\nEND:VEVENT\r\n" % (e["uid"], e["summary"],
+                                                  e["start"])
+                for e in H.events.get(cal, [])) + "END:VCALENDAR\r\n")
+            raw = ics.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/calendar")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
             return
         self._json({"ok": True})
 
@@ -185,7 +188,7 @@ class H(BaseHTTPRequestHandler):
             parts = self.path.rstrip("/").split("/")
             cal = parts[-2]
             uid = parts[-1].replace(".ics", "")
-            # parse SUMMARY/DTSTART out of the ICS body so REPORT can serve them
+            # parse SUMMARY/DTSTART out of the ICS body so GET can serve them
             summary, start = "", ""
             for line in data.decode("utf-8", "replace").replace("\r\n", "\n").split("\n"):
                 if line.startswith("SUMMARY:"):
@@ -212,37 +215,6 @@ class H(BaseHTTPRequestHandler):
             H.events[cal] = [e for e in H.events.get(cal, [])
                              if e["uid"] != uid]
         self._json({"ok": True}, code=204)
-
-    def do_REPORT(self):
-        if not self._dav_ok():
-            self._json({"error": "unauthorized"}, code=401)
-            return
-        H.put_calls.append(("REPORT", self.path))
-        body = self._body()
-        cal = self.path.rstrip("/").rsplit("/", 1)[-1]
-        m = re.search(r"time-range start='([^']+)' end='([^']+)'", body)
-        t0 = H._dt(m.group(1)) if m else "0"
-        t1 = H._dt(m.group(2)) if m else "9" * 15
-        evs = [e for e in H.events.get(cal, [])
-               if t0 <= H._dt(e["start"]) <= t1]
-        xml = ('<d:multistatus xmlns:d="DAV:" '
-               'xmlns:c="urn:ietf:params:xml:ns:caldav">'
-               + "".join(
-                   f"<d:response><d:href>/remote.php/dav/calendars/u/"
-                   f"{cal}/{e['uid']}.ics</d:href><d:propstat><d:prop>"
-                   f"<c:calendar-data>BEGIN:VCALENDAR\nBEGIN:VEVENT\n"
-                   f"UID:{e['uid']}\nSUMMARY:{e['summary']}"
-                   f"\nDTSTART:{e['start']}\nEND:VEVENT"
-                   f"\nEND:VCALENDAR</c:calendar-data></d:prop>"
-                   f"<d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
-                   f"</d:response>"
-                   for e in evs) + "</d:multistatus>")
-        raw = xml.encode()
-        self.send_response(207)
-        self.send_header("Content-Type", "application/xml")
-        self.send_header("Content-Length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
 
     def do_POST(self):
         body = self._body()

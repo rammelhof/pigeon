@@ -553,7 +553,7 @@ c, b = http("/nc/bot1/ncx/calendars/family?from=2026-10-15T00:00:00Z"
             "&to=2026-10-15T23:59:59Z", headers=auth)
 check("/nc lists today's appointments (time-range filter works)",
       c == 200 and any(e.get("summary") == "r: Training"
-                       and "10:00:00" in e.get("start", "")
+                       and e.get("start", "").endswith("T080000Z")
                        for e in b.get("events", []))
       and not any(e.get("summary") == "Old thing"
                   for e in b.get("events", [])), str(b)[:250])

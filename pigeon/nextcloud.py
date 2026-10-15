@@ -16,6 +16,7 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -219,28 +220,78 @@ def caldav_calendars(creds):
     return out
 
 
+def _ics_dt(value):
+    """DTSTART/DTEND (compact RFC5545, ISO, date, UTC, TZID=...) -> naive
+    datetime (UTC for offset values), or None."""
+    v = re.sub(r"^TZID=[^:]+:", "", (value or "").strip())
+    if re.match(r"^\d{4}-\d{2}-\d{2}", v):
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt.astimezone(timezone.utc).replace(tzinfo=None) \
+            if dt.tzinfo is not None else dt
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})"
+                r"([+-]\d{4}|Z)?)?$", v)
+    if not m:
+        return None
+    y, mo, d, h, mi, s, off = m.groups()
+    try:
+        dt = datetime(int(y), int(mo), int(d), int(h or 0), int(mi or 0),
+                      int(s or 0))
+    except ValueError:
+        return None
+    shift = 0
+    if off and off != "Z":
+        sign = -1 if off[0] == "-" else 1
+        shift = sign * (int(off[1:3]) * 3600 + int(off[3:5]) * 60)
+    return dt - timedelta(seconds=shift)
+
+
+def _rfc3339(value):
+    """RFC3339 (or date) -> naive UTC datetime, or None."""
+    v = (value or "").strip()
+    try:
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def caldav_events(creds, calid, t_from, t_to):
-    """Events of a calendar in [t_from, t_to) as plain dicts (RFC3339 in)."""
-    body = ("<?xml version='1.0'?>"
-            "<c:calendar-query xmlns:c='urn:ietf:params:xml:ns:caldav'"
-            " xmlns:d='DAV:'><d:prop><d:getetag/><c:calendar-data/>"
-            "</d:prop><c:filter><c:comp-filter name='VCALENDAR'>"
-            "<c:comp-filter name='VEVENT'><c:time-range"
-            f" start='{t_from}' end='{t_to}'/></c:comp-filter>"
-            "</c:comp-filter></c:filter></c:calendar-query>")
-    r = requests.request("REPORT", f"{caldav_base(creds[0])}/{calid}/",
-                         auth=creds, data=body.encode(),
-                         headers={"Depth": "1",
-                                  "Content-Type": "text/xml"}, timeout=30)
-    if r.status_code not in (200, 207):
+    """Events of a calendar overlapping [t_from, t_to) as plain dicts
+    (RFC3339 in). Fetches the whole calendar (GET) and filters locally —
+    a universally supported operation; Nextcloud's calendar-query REPORT
+    returns HTTP 500 in many versions."""
+    r = requests.get(f"{caldav_base(creds[0])}/{calid}/", auth=creds,
+                     headers={"Accept": "text/calendar"}, timeout=60)
+    if r.status_code != 200:
         raise RuntimeError(f"events: HTTP {r.status_code}")
+    text = re.sub(r"\r?\n[ \t]", "", r.text)  # unfold ICS continuation
+    t_from, t_to = _rfc3339(t_from), _rfc3339(t_to)
+    if t_from is None or t_to is None:
+        raise RuntimeError(f"bad time range: {(t_from, t_to)}")
     evs = []
-    for m in re.finditer(r"BEGIN:VEVENT\s(.*?)END:VEVENT", r.text, re.S):
+    for m in re.finditer(r"BEGIN:VEVENT(.*?)END:VEVENT", text, re.S):
         blk = m.group(1)
 
         def g(tag):
             mm = re.search(r"^" + tag + r"[;:](.*)$", blk, re.M | re.I)
             return mm.group(1).strip() if mm else ""
+
+        start = _ics_dt(g("DTSTART"))
+        if start is None:
+            continue
+        end = _ics_dt(g("DTEND"))
+        if end is None or end <= start:  # no/one-point DTEND -> 1 hour
+            end = start + timedelta(hours=1)
+        # local wall clock (all-day or no TZ) vs UTC range: widen the day
+        if re.fullmatch(r"\d{8}", g("DTSTART")) is not None:  # all-day
+            start, end = start, start + timedelta(days=1)
+        if not (start < t_to and end >= t_from):
+            continue
         evs.append({"summary": g("SUMMARY"), "start": g("DTSTART"),
                     "end": g("DTEND"), "location": g("LOCATION"),
                     "description": g("DESCRIPTION")})
@@ -253,13 +304,19 @@ def caldav_create(creds, calid, spec):
     uid = uuid.uuid4().hex
 
     def dt(s):
-        # a bare "YYYY-MM-DD" becomes a local all-day date
-        return s[10:].replace(":", "") + "Z" \
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", s) else s
+        """datetime -> compact RFC5545 (UTC); a bare date stays a date
+        (all-day). RFC 5545 forbids ISO-style values in ICS bodies."""
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            return s.replace("-", "")
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            return d.strftime("%Y%m%dT%H%M%S")
+        return d.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    st = spec["start"].replace("Z", "Z")
+    st = spec["start"]
     ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//pigeon//EN",
-           "BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{st}", "DTSTART:" + dt(st)]
+           "BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{dt(st)}",
+           "DTSTART:" + dt(st)]
     if spec.get("end"):
         ics.append("DTEND:" + dt(spec["end"]))
     ics.append(f"SUMMARY:{spec['title']}")
