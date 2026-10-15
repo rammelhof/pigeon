@@ -21,6 +21,28 @@ class H(BaseHTTPRequestHandler):
     # WebDAV path of the searched file (what SEARCH resolves to)
     dav_href = "/remote.php/dav/files/ncuser/Talk/demo/file.webp"
     file_bytes = b"FAKE-IMAGE-BYTES-1234"
+    # /nc proxy store: WebDAV files {path: bytes}, CalDAV calendars+events
+    files = {"temp/notes.txt": b"hello nextcloud"}
+    calendars = {"family": "Family", "work": "Work"}
+    events = {"family": [{"uid": "ev1", "summary": "Old thing",
+                          "start": "2000-01-01T08:00:00+01:00"}],
+               "work": []}
+    put_calls = []  # (method, path) for the /nc proxy tests
+
+    @staticmethod
+    def _dt(s):
+        """dt variants we deal with -> comparable UTC string"""
+        import datetime as _d
+        s = s.strip()
+        try:
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = _d.datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_d.timezone.utc)
+            return dt.astimezone(_d.timezone.utc).strftime("%Y%m%d%H%M%S")
+        except ValueError:
+            return re.sub(r"[-:]", "", s.replace("Z", ""))[:15]
 
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -45,6 +67,22 @@ class H(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self):
+        if self.path.startswith("/remote.php/webdav/"):
+            auth = self._basic_auth()
+            ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
+            if not ok:
+                self._json({"error": "unauthorized"}, code=401)
+                return
+            data = H.files.get(self.path[len("/remote.php/webdav/"):])
+            if data is None:
+                self._json({"error": "not found"}, code=404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/remote.php/dav/files/"):
             auth = self._basic_auth()
             ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
@@ -78,6 +116,127 @@ class H(BaseHTTPRequestHandler):
                f"<oc:fileid>{file_id}</oc:fileid></d:prop>"
                "<d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
                "</d:response></d:multistatus>")
+        raw = xml.encode()
+        self.send_response(207)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _dav_ok(self):
+        auth = self._basic_auth()
+        return auth is not None and H.share_auth.get(auth[0]) == auth[1]
+
+    def do_PROPFIND(self):
+        if not self._dav_ok():
+            self._json({"error": "unauthorized"}, code=401)
+            return
+        H.put_calls.append(("PROPFIND", self.path))
+        if self.path.startswith("/remote.php/dav/calendars/"):
+            cal = self.path.rstrip("/").rsplit("/", 1)[-1]
+            xml = ('<d:multistatus xmlns:d="DAV:" '
+                   'xmlns:c="urn:ietf:params:xml:ns:caldav">'
+                   + "".join(
+                       f"<d:response><d:href>/remote.php/dav/calendars/"
+                       f"u/{c}/</d:href><d:propstat><d:prop>"
+                       f"<d:displayname>{n}</d:displayname></d:prop>"
+                       f"<d:status>HTTP/1.1 200 OK</d:status>"
+                       f"</d:propstat></d:response>"
+                       for c, n in H.calendars.items())
+                   + "</d:multistatus>")
+        else:  # webdav dir listing
+            root = self.path[len("/remote.php/webdav/"):] .rstrip("/")
+            resp = []
+            for p in sorted(H.files):
+                if root and not p.startswith(root + "/"):
+                    continue
+                name = p.rsplit("/", 1)[-1]
+                resp.append(
+                        f"<d:response><d:href>/remote.php/webdav/{p}"
+                        f"</d:href><d:propstat><d:prop>"
+                        f"<d:displayname>{name}</d:displayname>"
+                        f"<d:getcontentlength>{len(H.files[p])}"
+                        f"</d:getcontentlength>"
+                        f"<d:getlastmodified>Tue, 01 Jan 2026 00:00:00 GMT"
+                        f"</d:getlastmodified>"
+                        f"</d:prop><d:status>HTTP/1.1 200 OK</d:status>"
+                        f"</d:propstat></d:response>")
+            xml = ('<d:multistatus xmlns:d="DAV:">'
+                   + "".join(resp) + "</d:multistatus>")
+        raw = xml.encode()
+        self.send_response(207)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length", 0))
+        data = self.rfile.read(n)
+        if not self._dav_ok():
+            self._json({"error": "unauthorized"}, code=401)
+            return
+        H.put_calls.append(("PUT", self.path))
+        if self.path.startswith("/remote.php/webdav/"):
+            H.files[self.path[len("/remote.php/webdav/"):]] = data
+            self.send_response(201)
+            self.end_headers()
+        elif self.path.startswith("/remote.php/dav/calendars/"):
+            parts = self.path.rstrip("/").split("/")
+            cal = parts[-2]
+            uid = parts[-1].replace(".ics", "")
+            # parse SUMMARY/DTSTART out of the ICS body so REPORT can serve them
+            summary, start = "", ""
+            for line in data.decode("utf-8", "replace").replace("\r\n", "\n").split("\n"):
+                if line.startswith("SUMMARY:"):
+                    summary = line[len("SUMMARY:"):].strip()
+                elif line.startswith("DTSTART:"):
+                    start = line[len("DTSTART:"):].strip()
+            H.events.setdefault(cal, []).append(
+                {"uid": uid, "summary": summary, "start": start})
+            self.send_response(201)
+            self.end_headers()
+        else:
+            self._json({"ok": True}, code=204)
+
+    def do_DELETE(self):
+        if not self._dav_ok():
+            self._json({"error": "unauthorized"}, code=401)
+            return
+        H.put_calls.append(("DELETE", self.path))
+        if self.path.startswith("/remote.php/webdav/"):
+            H.files.pop(self.path[len("/remote.php/webdav/"):], None)
+        elif self.path.startswith("/remote.php/dav/calendars/"):
+            parts = self.path.rstrip("/").split("/")
+            cal, uid = parts[-2], parts[-1].replace(".ics", "")
+            H.events[cal] = [e for e in H.events.get(cal, [])
+                             if e["uid"] != uid]
+        self._json({"ok": True}, code=204)
+
+    def do_REPORT(self):
+        if not self._dav_ok():
+            self._json({"error": "unauthorized"}, code=401)
+            return
+        H.put_calls.append(("REPORT", self.path))
+        body = self._body()
+        cal = self.path.rstrip("/").rsplit("/", 1)[-1]
+        m = re.search(r"time-range start='([^']+)' end='([^']+)'", body)
+        t0 = H._dt(m.group(1)) if m else "0"
+        t1 = H._dt(m.group(2)) if m else "9" * 15
+        evs = [e for e in H.events.get(cal, [])
+               if t0 <= H._dt(e["start"]) <= t1]
+        xml = ('<d:multistatus xmlns:d="DAV:" '
+               'xmlns:c="urn:ietf:params:xml:ns:caldav">'
+               + "".join(
+                   f"<d:response><d:href>/remote.php/dav/calendars/u/"
+                   f"{cal}/{e['uid']}.ics</d:href><d:propstat><d:prop>"
+                   f"<c:calendar-data>BEGIN:VCALENDAR\nBEGIN:VEVENT\n"
+                   f"UID:{e['uid']}\nSUMMARY:{e['summary']}"
+                   f"\nDTSTART:{e['start']}\nEND:VEVENT"
+                   f"\nEND:VCALENDAR</c:calendar-data></d:prop>"
+                   f"<d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
+                   f"</d:response>"
+                   for e in evs) + "</d:multistatus>")
         raw = xml.encode()
         self.send_response(207)
         self.send_header("Content-Type", "application/xml")

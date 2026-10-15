@@ -50,11 +50,12 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 # ---------------------------------------------------------------- config --
 
@@ -254,6 +255,293 @@ def _save_download(dl_url, name, dest_dir, auth=None):
         raise
     os.replace(tmp, dest)
     return os.path.basename(dest), size
+
+
+# ---------------------------------------------------------------------
+# /nc — Pigeon acts as the room's Nextcloud proxy: files (WebDAV) and
+# calendar (CalDAV). pi never sees the app password (it lives only in
+# .room.json, outside the sandbox) — it gets a 24h room-scoped token
+# (PIGEON_NC_TOKEN) that this endpoint verifies. The Nextcloud URL is
+# not in pi's environment on purpose: the proxy is the only door.
+#
+#   GET    /nc/<bot>/<room>/files?path=DIR        list a directory
+#   GET    /nc/<bot>/<room>/files?path=FILE&download=1   download (raw)
+#   PUT    /nc/<bot>/<room>/files?path=FILE       upload (body, capped)
+#   DELETE /nc/<bot>/<room>/files?path=FILE       delete
+#   GET    /nc/<bot>/<room>/calendars             list calendars
+#   GET    /nc/<bot>/<room>/calendars/<calid>?from=&to=   events (RFC3339)
+#   PUT    /nc/<bot>/<room>/calendars/<calid>     new appointment (JSON)
+#   DELETE /nc/<bot>/<room>/calendars/<calid>/<uid>      delete (UID)
+# ---------------------------------------------------------------------
+TOKEN_TTL_H = 24
+
+
+def _nc_token(bot, room, hour=None):
+    """Room-scoped token: HMAC of the webhook secret, rolling 24h window —
+    no storage, and a leaked token dies within a day."""
+    h = int(time.time() // 3600) if hour is None else hour
+    return hashlib.sha256(
+        (f"{TALK_BOT_SECRET}\x00nc:{bot}:{room}:{h}").encode()).hexdigest()[:16]
+
+
+def _nc_verify(token, bot, room):
+    now = int(time.time() // 3600)
+    return token in (_nc_token(bot, room, now),
+                     _nc_token(bot, room, now - 1))
+
+
+def _nc_room(bot, room):
+    """(room-dir, creds or None) — same layout as the webhook rooms."""
+    if (not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", bot)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", room)):
+        return None, None, ("bad bot or room name",
+                            {"error": "bad bot or room name"}, 400)
+    room_dir = os.path.join(BOTS_DIR, bot, "rooms", room)
+    if not os.path.isdir(room_dir):
+        return None, None, ("unknown room",
+                            {"error": "unknown room"}, 404)
+    return room_dir, _room_file_creds(room_dir), None
+
+
+def _dav_path(rel):
+    """rel (relative, no ..) -> /remote.php/webdav/<rel>; None = bad."""
+    rel = (rel or "").strip("/")
+    if rel and (".." in rel.split("/") or "\\" in rel or rel.startswith("~")):
+        return None
+    return f"/remote.php/webdav/{rel}"
+
+
+def _caldav_base(user):
+    return (NEXTCLOUD_URL.rstrip("/") + "/remote.php/dav/calendars/"
+            + str(user).split("@", 1)[0])
+
+
+def _caldav_calendars(creds):
+    base = _caldav_base(creds[0])
+    prop = ("<prop xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
+            "<d:displayname/><c:calendar-color/></prop>")
+    body = ("<?xml version='1.0'?>"
+            "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
+    r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
+                         headers={"Depth": "1", "Content-Type": "text/xml"},
+                         timeout=30)
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"calendars: HTTP {r.status_code}")
+    out = []
+    for m in re.finditer(
+            r"<d:response>\s*<d:href>([^<]+)</d:href>.*?<d:displayname>"
+            r"([^<]*)</d:displayname>.*?</d:response>",
+            r.text, re.S):
+        url = m.group(1)
+        out.append({"name": m.group(2).strip(),
+                    "id": url.rstrip("/").rsplit("/", 1)[-1] if "/" in url
+                    else ""})
+    return out
+
+
+def _caldav_events(creds, calid, t_from, t_to):
+    body = ("<?xml version='1.0'?>"
+            "<c:calendar-query xmlns:c='urn:ietf:params:xml:ns:caldav'"
+            " xmlns:d='DAV:'><d:prop><d:getetag/><c:calendar-data/>"
+            "</d:prop><c:filter><c:comp-filter name='VCALENDAR'>"
+            "<c:comp-filter name='VEVENT'><c:time-range"
+            f" start='{t_from}' end='{t_to}'/></c:comp-filter>"
+            "</c:comp-filter></c:filter></c:calendar-query>")
+    r = requests.request("REPORT", f"{_caldav_base(creds[0])}/{calid}/",
+                         auth=creds, data=body.encode(),
+                         headers={"Depth": "1",
+                                  "Content-Type": "text/xml"}, timeout=30)
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"events: HTTP {r.status_code}")
+    evs = []
+    for m in re.finditer(r"BEGIN:VEVENT\s(.*?)END:VEVENT", r.text, re.S):
+        blk = m.group(1)
+
+        def g(tag):
+            mm = re.search(r"^" + tag + r"[;:](.*)$", blk, re.M | re.I)
+            return mm.group(1).strip() if mm else ""
+        evs.append({"summary": g("SUMMARY"), "start": g("DTSTART"),
+                    "end": g("DTEND"), "location": g("LOCATION"),
+                    "description": g("DESCRIPTION")})
+    return evs
+
+
+def _caldap_new(creds, calid, spec):
+    """spec (JSON: title/start/end/location/description/attendees) -> ICS PUT."""
+    uid = uuid.uuid4().hex
+    st = spec["start"].replace("Z", "Z")
+    dt = ("DTSTART:"
+          + (st[10:].replace(":", "") + "Z" if re.match(r"^\d{4}-\d{2}-\d{2}$",
+                                                        st) else st))
+    et = ""
+    if spec.get("end"):
+        et = ("DTEND:"
+              + (spec["end"][10:].replace(":", "") + "Z"
+                 if re.match(r"^\d{4}-\d{2}-\d{2}$", spec["end"])
+                 else spec["end"]))
+    ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//pigeon//EN",
+           "BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{st}", dt, et,
+           f"SUMMARY:{spec['title']}"]
+    if spec.get("location"):
+        ics.append("LOCATION:" + spec["location"])
+    if spec.get("description"):
+        ics.append("DESCRIPTION:" + spec["description"])
+    for a in (spec.get("attendees") or []):
+        ics.append(f"ATTENDEE;CN={a}:mailto:{a}")
+    ics += ["END:VEVENT", "END:VCALENDAR"]
+    r = requests.put(f"{_caldav_base(creds[0])}/{calid}/{uid}.ics",
+                     auth=creds, data=("\r\n".join(ics)).encode(),
+                     headers={"Content-Type": "text/calendar"}, timeout=30)
+    if r.status_code not in (201, 204):
+        raise RuntimeError(f"appointment: HTTP {r.status_code}")
+    return uid
+
+
+@app.route("/nc/<bot>/<room>/files", methods=["GET", "PUT", "DELETE"])
+def nc_files(bot, room):
+    room_dir, creds, err = _nc_room(bot, room)
+    if err:
+        return jsonify(err[1]), err[2]
+    auth = request.headers.get("Authorization", "").split(" ", 1)
+    if auth[0] != "Bearer" or not _nc_verify(auth[1] if len(auth) > 1 else "",
+                                             bot, room):
+        return jsonify({"error": "invalid or expired token"}), 401
+    if creds is None:
+        return jsonify({"error": "room has no Nextcloud app password — "
+                                 "send: /pw <user> <app-password>"}), 403
+    rel = request.args.get("path", "")
+    url = _dav_path(rel)
+    if url is None:
+        return jsonify({"error": "bad path"}), 400
+    if request.method == "DELETE":
+        r = requests.delete(NEXTCLOUD_URL + url, auth=creds, timeout=30)
+        if r.status_code not in (200, 204):
+            return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
+        return jsonify({"ok": True, "path": rel})
+    if request.method == "PUT":  # upload: raw body, capped
+        cap = int(MAX_FILE_SIZE_MB * 1024 * 1024)
+        if not rel or rel.endswith("/"):
+            return jsonify({"error": "path must include a file name"}), 400
+        length = int(request.headers.get("Content-Length") or 0)
+        if length > cap:
+            return jsonify({"error": f"file exceeds {MAX_FILE_SIZE_MB:.0f} MB"}), 413
+        body = request.get_data()[:cap + 1]
+        if len(body) > cap:
+            return jsonify({"error": f"file exceeds {MAX_FILE_SIZE_MB:.0f} MB"}), 413
+        r = requests.put(NEXTCLOUD_URL + url, auth=creds, data=body,
+                         timeout=(10, 600))
+        if r.status_code not in (201, 204):
+            return jsonify({"error": f"upload: HTTP {r.status_code}"}), 502
+        return jsonify({"ok": True, "path": rel, "bytes": len(body)}), 201
+    # GET: list a directory, or stream the file with download=1
+    if request.args.get("download"):
+        with requests.get(NEXTCLOUD_URL + url, auth=creds, stream=True,
+                          timeout=(10, 600)) as r:
+            if r.status_code >= 400:
+                return jsonify({"error": f"download: HTTP {r.status_code}"}), 502
+            data = r.raw.read(MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
+        if len(data) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            return jsonify({"error": "file too large"}), 413
+        return Response(data, mimetype=r.headers.get("Content-Type"),
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{os.path.basename(rel)}"'})
+    prop = ("<prop xmlns:d='DAV:'><d:displayname/><d:getcontentlength/>"
+            "<d:getlastmodified/><d:resourcetype/></prop>")
+    body = f"<?xml version='1.0'?><d:propfind xmlns:d='DAV:'>{prop}</d:propfind>"
+    r = requests.request("PROPFIND", NEXTCLOUD_URL + url + "/",
+                         auth=creds, data=body.encode(),
+                         headers={"Depth": "1",
+                                  "Content-Type": "text/xml"}, timeout=30)
+    if r.status_code not in (200, 207):
+        return jsonify({"error": f"list: HTTP {r.status_code}"}), 502
+    items = []
+    for m in re.finditer(
+            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
+            r.text, re.S):
+        href, blk = m.group(1), m.group(2)
+        if "<d:collection/>" not in blk and "<d:collection" not in blk:
+            name = m.group(1).rstrip("/").rsplit("/", 1)[-1]
+            items.append({
+                "name": name, "path": rel + "/" + name if rel else name,
+                "size": int(re.search(r"<d:getcontentlength>(\d+)</d:getcontentlength>", blk).group(1)) if re.search(r"<d:getcontentlength>(\d+)</d:getcontentlength>", blk) else 0,
+                "modified": (re.search(r"<d:getlastmodified>([^<]+)</d:getlastmodified>", blk).group(1) if re.search(r"<d:getlastmodified>([^<]+)</d:getlastmodified>", blk) else "")})
+    return jsonify({"path": rel, "files": items})
+
+
+@app.route("/nc/<bot>/<room>/calendars", methods=["GET"])
+def nc_calendars(bot, room):
+    room_dir, creds, err = _nc_room(bot, room)
+    if err:
+        return jsonify(err[1]), err[2]
+    auth = request.headers.get("Authorization", "").split(" ", 1)
+    if auth[0] != "Bearer" or not _nc_verify(auth[1] if len(auth) > 1 else "",
+                                             bot, room):
+        return jsonify({"error": "invalid or expired token"}), 401
+    if creds is None:
+        return jsonify({"error": "room has no Nextcloud app password — "
+                                 "send: /pw <user> <app-password>"}), 403
+    try:
+        return jsonify({"calendars": _caldav_calendars(creds)})
+    except Exception as e:
+        log.warning("nc calendars failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/nc/<bot>/<room>/calendars/<calid>", methods=["GET", "PUT"])
+def nc_calendar_events(bot, room, calid):
+    room_dir, creds, err = _nc_room(bot, room)
+    if err:
+        return jsonify(err[1]), err[2]
+    auth = request.headers.get("Authorization", "").split(" ", 1)
+    if auth[0] != "Bearer" or not _nc_verify(auth[1] if len(auth) > 1 else "",
+                                             bot, room):
+        return jsonify({"error": "invalid or expired token"}), 401
+    if creds is None:
+        return jsonify({"error": "room has no Nextcloud app password — "
+                                 "send: /pw <user> <app-password>"}), 403
+    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,200}", calid):
+        return jsonify({"error": "bad calendar id"}), 400
+    if request.method == "PUT":  # new appointment from JSON
+        spec = request.get_json(silent=True) or {}
+        if not spec.get("title") or not spec.get("start"):
+            return jsonify({"error": "title and start are required"}), 400
+        try:
+            uid = _caldap_new(creds, calid, spec)
+        except Exception as e:
+            log.warning("nc appointment failed: %s", e)
+            return jsonify({"error": str(e)}), 502
+        return jsonify({"ok": True, "uid": uid,
+                        "title": spec["title"], "start": spec["start"]}), 201
+    t_from = request.args.get("from") or (datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))
+    t_to = request.args.get("to") or ((datetime.utcnow() + timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    try:
+        return jsonify({"calendar": calid, "events":
+                        _caldav_events(creds, calid, t_from, t_to)})
+    except Exception as e:
+        log.warning("nc events failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/nc/<bot>/<room>/calendars/<calid>/<uid>", methods=["DELETE"])
+def nc_calendar_delete(bot, room, calid, uid):
+    room_dir, creds, err = _nc_room(bot, room)
+    if err:
+        return jsonify(err[1]), err[2]
+    auth = request.headers.get("Authorization", "").split(" ", 1)
+    if auth[0] != "Bearer" or not _nc_verify(auth[1] if len(auth) > 1 else "",
+                                             bot, room):
+        return jsonify({"error": "invalid or expired token"}), 401
+    if creds is None:
+        return jsonify({"error": "room has no Nextcloud app password — "
+                                 "send: /pw <user> <app-password>"}), 403
+    if not (re.fullmatch(r"[A-Za-z0-9_:-]{1,200}", calid)
+            and re.fullmatch(r"[A-Za-z0-9._-]{1,200}", uid)):
+        return jsonify({"error": "bad calendar id or uid"}), 400
+    r = requests.delete(f"{_caldav_base(creds[0])}/{calid}/{uid}.ics",
+                        auth=creds, timeout=30)
+    if r.status_code not in (200, 204):
+        return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
+    return jsonify({"ok": True, "uid": uid})
 
 
 def _apply_file_param(message, f, cwd):
@@ -745,12 +1033,12 @@ def pi_config_status():
     return False, PI_CONFIG_DIR
 
 
-def pi_command(prompt, session_id, cwd):
+def pi_command(prompt, session_id, cwd, bot, room):
     """Always run in the room's stable pi session: --session-id opens it
     or creates it (first message of a new room). The working directory is
     the room's workspace/ subfolder; when SANDBOX is on and bwrap exists,
     the whole run is wrapped in a bubblewrap sandbox (full network)."""
-    cmd = [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
+    pi = [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
     ws = os.path.join(cwd, "workspace")
     if SANDBOX:
         bwrap = shutil.which("bwrap")
@@ -761,47 +1049,53 @@ def pi_command(prompt, session_id, cwd):
         # bound here — so in addition to the read-only tool belt, the
         # merged-usr root symlinks must be recreated inside, or the
         # dynamic linker (/lib64/...) is invisible and every exec fails.
-        cmd = [bwrap,
-               "--ro-bind", "/usr", "/usr",
-               "--ro-bind", "/etc", "/etc",
-               "--ro-bind", "/var", "/var",
-               "--ro-bind", "/run", "/run",      # Docker DNS: /run/resolv.conf
-               "--ro-bind", "/sys", "/sys",
-               # merged-usr shims (in the container / these are symlinks)
-               "--symlink", "usr/lib64", "/lib64",
-               "--symlink", "usr/lib", "/lib",
-               "--symlink", "usr/bin", "/bin",
-               "--symlink", "usr/sbin", "/sbin",
-               # mask sensitive paths FIRST (empty, private to this
-               # sandbox): other rooms incl. their .room.json, pigeon's
-               # code. Ops are applied in order, so the writable binds
-               # below pierce the /bots mask at exactly the workspace
-               "--tmpfs", BOTS_DIR,
-               "--tmpfs", "/app",
-               # writable: this room's workspace + the pi home (sessions,
-               # skills, model credentials)
-               "--bind", ws, ws,
-               "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
-               # inherit NO environment (TALK_BOT_SECRET lives in
-               # gunicorn's) — set only what pi needs; HOME in the
-               # workspace keeps the room self-contained
-               "--clearenv",
-               "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-               "--setenv", "HOME", ws,
-               "--setenv", "LANG", "C.UTF-8",
-               # pi must still find auth.json/models.json/sessions
-               "--setenv", "PI_CODING_AGENT_DIR", PI_CONFIG_DIR,
-               # fresh tmp/dev/proc (pid namespace: /proc shows pi only)
-               "--tmpfs", "/tmp",
-               "--dev", "/dev",
-               "--proc", "/proc",
-               # new PID/IPC/UTS namespaces, FULL network
-               "--unshare-pid",
-               "--unshare-ipc",
-               "--unshare-uts",
-               "--die-with-parent",
-               "--chdir", ws] + cmd
-    return cmd
+        flags = [
+            "--ro-bind", "/usr", "/usr",
+            "--ro-bind", "/etc", "/etc",
+            "--ro-bind", "/var", "/var",
+            "--ro-bind", "/run", "/run",      # Docker DNS: /run/resolv.conf
+            "--ro-bind", "/sys", "/sys",
+            # merged-usr shims (in the container / these are symlinks)
+            "--symlink", "usr/lib64", "/lib64",
+            "--symlink", "usr/lib", "/lib",
+            "--symlink", "usr/bin", "/bin",
+            "--symlink", "usr/sbin", "/sbin",
+            # mask sensitive paths FIRST (empty, private to this
+            # sandbox): other rooms incl. their .room.json, pigeon's
+            # code. Ops are applied in order, so the writable binds
+            # below pierce the /bots mask at exactly the workspace
+            "--tmpfs", BOTS_DIR,
+            "--tmpfs", "/app",
+            # writable: this room's workspace + the pi home (sessions,
+            # skills, model credentials)
+            "--bind", ws, ws,
+            "--bind", PI_CONFIG_DIR, PI_CONFIG_DIR,
+            # inherit NO environment (TALK_BOT_SECRET lives in
+            # gunicorn's) — set only what pi needs; HOME in the
+            # workspace keeps the room self-contained
+            "--clearenv",
+            "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+            "--setenv", "HOME", ws,
+            "--setenv", "LANG", "C.UTF-8",
+            # pi must still find auth.json/models.json/sessions
+            "--setenv", "PI_CODING_AGENT_DIR", PI_CONFIG_DIR,
+            # fresh tmp/dev/proc (pid namespace: /proc shows pi only)
+            "--tmpfs", "/tmp",
+            "--dev", "/dev",
+            "--proc", "/proc",
+            # new PID/IPC/UTS namespaces, FULL network
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--die-with-parent",
+            "--chdir", ws]
+        # the room's 24h Nextcloud-proxy token (only when the room has an
+        # app password) — the proxy is pi's only door to Nextcloud.
+        # Last flag: bwrap stops parsing at the first non-option arg.
+        if _room_file_creds(cwd) is not None:
+            flags += ["--setenv", "PIGEON_NC_TOKEN", _nc_token(bot, room)]
+        return [bwrap] + flags + pi
+    return pi
 
 
 def extract_answer_and_thinking(task):
@@ -820,7 +1114,8 @@ def extract_answer_and_thinking(task):
 
 def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking)."""
-    cmd = pi_command(task["message"], task["session_id"], task["cwd"])
+    cmd = pi_command(task["message"], task["session_id"], task["cwd"],
+                     task["bot"], task["room_id"])
     log.info("task %s: running %s", task["id"], " ".join(cmd[:-1]))
     proc = subprocess.Popen(cmd, cwd=task["workspace"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1236,7 +1531,7 @@ def webhook(bot):
     key = f"{bot}/{folder}"
     enqueue(key, bot, {
         "room": room,
-        "room_id": str(room),
+        "room_id": folder,
         "message": message,
         "sender": sender,
         "cwd": cwd,

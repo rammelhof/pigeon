@@ -108,6 +108,23 @@ class FakePopen:
             self.stdout = self._hang()
             self.stderr = io.StringIO("")
         else:
+            # stand-in for pi using the nextcloud skill: call the real
+            # /nc proxy with the token bwrap would have setenv'd
+            if (os.path.basename(cmd[0]).startswith("bwrap")
+                    and "PIGEON_NC_TOKEN" in cmd and first_attempt
+                    and "bot1/rooms/ncx" in cwd.replace("\\", "/")):
+                ti = cmd.index("PIGEON_NC_TOKEN")
+                try:
+                    urllib.request.urlopen(urllib.request.Request(
+                        "http://127.0.0.1:%s/nc/bot1/ncx/files"
+                        "?path=temp%%2Ffake-pi-upload.txt"
+                        % os.environ.get("PIGEON_PORT", "8088"),
+                        data=b"hello from sandboxed pi", method="PUT",
+                        headers={"Authorization": "Bearer "
+                                 + cmd[ti + 1]}),
+                        timeout=5).read()
+                except Exception:
+                    pass
             self.stdout = iter(GOOD)
             self.stderr = io.StringIO("")
 
@@ -143,9 +160,11 @@ app.startup()  # same init as the gunicorn post_fork hook
 from werkzeug.serving import run_simple  # noqa: E402
 
 
+_PIGEON_PORT = int(os.environ.get("PIGEON_PORT", "8088"))
+
 def _serve():
     try:
-        run_simple("127.0.0.1", 8088, app.app,
+        run_simple("127.0.0.1", _PIGEON_PORT, app.app,
                    use_reloader=False, threaded=True)
     except BaseException:
         traceback.print_exc()
@@ -154,7 +173,7 @@ def _serve():
 threading.Thread(target=_serve, daemon=True).start()
 time.sleep(0.5)
 
-BASE = "http://127.0.0.1:8088"
+BASE = f"http://127.0.0.1:{_PIGEON_PORT}"
 failures = []
 
 
@@ -178,7 +197,7 @@ def http(path, body=None, headers=None, method=None):
     try:
         return code, json.loads(raw or b"{}")
     except json.JSONDecodeError:
-        return code, {}
+        return code, raw  # non-JSON (e.g. a raw file download)
 
 
 def get(path):
@@ -447,6 +466,94 @@ check("file path added in front of the text message",
       prompt is not None and saved2[0] in prompt
       and prompt.index("chat/files/") < prompt.index("I send 2 test files."),
       str(prompt)[:200])
+
+# 4d3. /nc — the room's Nextcloud proxy (files + calendar), token auth
+ncx_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "ncx")
+s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+                                             room_token="ncx0001",
+                                             room_name="Ncx"))
+check("/nc room pw set", s == 200 and body.get("handled") == "/pw", str(body))
+H = nc_stub.H
+tok = app._nc_token("bot1", "ncx")
+auth = {"Authorization": "Bearer " + tok}
+
+c, _ = http("/nc/bot1/ncx/files")
+check("/nc without token: 401", c == 401, str(c))
+c, _ = http("/nc/bot1/ncx/files", headers={"Authorization": "Bearer deadbeef00000000"})
+check("/nc with foreign token: 401", c == 401, str(c))
+c, b = http("/nc/bot1/ncx/files", headers=auth)
+check("/nc list root shows the stub file", c == 200
+      and any(f["name"] == "notes.txt" for f in b.get("files", [])), str(b))
+c, b = http("/nc/bot1/ncx/files?path=temp%2Ffrom-pi.txt",
+            body=b"proxy upload test", method="PUT",
+            headers={**auth, "Content-Type": "text/plain"})
+check("/nc upload (PUT) stored via WebDAV with the room creds",
+      c == 201 and b.get("bytes") == len(b"proxy upload test")
+      and H.files.get("temp/from-pi.txt") == b"proxy upload test",
+      str(b) + str(list(H.files)))
+c, b = http("/nc/bot1/ncx/files?path=temp%2Fnotes.txt&download=1", headers=auth)
+check("/nc download streams the file bytes",
+      c == 200 and b == b"hello nextcloud", repr(b)[:60])
+c, b = http("/nc/bot1/ncx/files?path=temp%2Ffrom-pi.txt", method="DELETE",
+            headers=auth)
+check("/nc delete removes the file",
+      c == 200 and "temp/from-pi.txt" not in H.files, str(b))
+c, b = http("/nc/bot1/ncx/calendars", headers=auth)
+check("/nc lists calendars (CalDAV PROPFIND)",
+      c == 200 and {x["name"] for x in b.get("calendars", [])}
+      == {"Family", "Work"}, str(b))
+c, b = http("/nc/bot1/ncx/calendars/family",
+            body=json.dumps({"title": "r: Training",
+                             "start": "2026-10-15T10:00:00+02:00",
+                             "end": "2026-10-15T11:00:00+02:00",
+                             "location": "gym"}), method="PUT",
+            headers={**auth, "Content-Type": "application/json"})
+new_uid = b.get("uid") if isinstance(b, dict) else None
+cal_event = next((e for e in H.events.get("family", [])
+                  if e["uid"] == new_uid), None)
+check("/nc create appointment (ICS PUT) in the right calendar",
+      c == 201 and bool(new_uid)
+      and any("SUMMARY:r: Training" in (e.get("summary", "") and "") or
+              e["uid"] == new_uid for e in H.events.get("family", [])),
+      str(b))
+c, b = http("/nc/bot1/ncx/calendars/family?from=2026-10-15T00:00:00Z"
+            "&to=2026-10-15T23:59:59Z", headers=auth)
+check("/nc lists today's appointments (time-range filter works)",
+      c == 200 and any(e.get("summary") == "r: Training"
+                       and "10:00:00" in e.get("start", "")
+                       for e in b.get("events", []))
+      and not any(e.get("summary") == "Old thing"
+                  for e in b.get("events", [])), str(b)[:250])
+c, b = http(f"/nc/bot1/ncx/calendars/family/{new_uid}", method="DELETE",
+            headers=auth) if new_uid else (0, {})
+check("/nc delete appointment by uid",
+      c == 200 and all(e["uid"] != new_uid
+                       for e in H.events.get("family", [])), str(b))
+# token is room-scoped: the same token must not open another room
+s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+                                             room_token="othrm001",
+                                             room_name="Oth"))
+c, _ = http("/nc/bot1/oth/files",
+            headers={"Authorization": "Bearer " + tok})
+check("/nc token is room-scoped (cross-room token rejected)",
+      c == 401, str(c))
+# fake-pi gets the token as its LAST bwrap flag (right before the binary)
+signed_webhook("bot1", new_payload("hello ncx", room_token="ncx0001",
+                                   room_name="Ncx"))
+check("ncx task done", (t := wait_room_done("bot1/rooms/ncx")) is not None
+      and t["status"] == "done", str(t))
+last = [c[1] for c in FakePopen.cmds
+        if os.path.basename(c[1][0]).casefold().startswith("bwrap")][-1]
+tok_i = last.index("PIGEON_NC_TOKEN") if "PIGEON_NC_TOKEN" in last else -1
+run_tok = last[tok_i + 1] if tok_i >= 0 and tok_i + 1 < len(last) else ""
+check("pi run gets PIGEON_NC_TOKEN as the last bwrap flag (before pi)",
+      tok_i >= 0 and last[tok_i - 1] == "--setenv"
+      and app._nc_verify(run_tok, "bot1", "ncx")
+      and last[tok_i + 2] == "fake-pi",
+      str(last[tok_i - 1:tok_i + 3]))
+check("pi run uploads through the /nc proxy with the token",
+      H.files.get("temp/fake-pi-upload.txt") == b"hello from sandboxed pi",
+      str(list(H.files)))
 
 # 4e. wrong credentials -> failure hint + share link, task still runs
 signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
