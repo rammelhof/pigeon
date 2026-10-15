@@ -28,7 +28,7 @@ you (pi) then handle it with full room context and skills.
 | `prompt` | self-contained instruction of what to do when it fires. Include all context the fired run needs (no one types extra text). |
 | `time` | `"HH:MM"` 24h local time (daily). Combine with `tz`. |
 | `tz` | IANA timezone name, e.g. `Europe/Vienna`. Default it to the user's local zone; `Europe/Vienna` if unknown. |
-| `every_minutes` | number, ≥ 5 — repeat at this interval instead of a clock time. |
+| `every_minutes` | number, ≥ 5 — repeat at this interval in minutes instead of a clock time. |
 | `start_time` | optional `"HH:MM"` 24h phase anchor for `every_minutes`: runs happen at `start_time`, `start_time + interval`, `start_time + 2·interval`, … (wall clock, in the entry's timezone — `window.tz` if there is a window, else `tz`, else UTC). Makes the next run predictable and stable across restarts. Without it, the next run is simply "now + interval". |
 | `window` | optional, only with `every_minutes`: `{"start": "HH:MM", "end": "HH:MM", "tz": "<IANA>"}` — the run only happens inside this local time window; with `start_time`, anchored candidates outside the window are skipped (the phase is kept); without it, the next run outside snaps to the next window start (e.g. `every_minutes: 60, window 10:00–22:00` → runs at 10, 11, …, 21:00 each day). |
 
