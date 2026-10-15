@@ -198,10 +198,13 @@ def caldav_base(user):
 
 
 def caldav_calendars(creds):
-    """[{name, id}] via PROPFIND with Depth 1."""
+    """[{name, id}] of the real calendars via PROPFIND with Depth 1.
+    Only entries whose resourcetype is c:calendar count — the
+    calendar-home collection itself (and any other collections) are
+    listed too, but they are not calendars and 404 on access."""
     base = caldav_base(creds[0])
     prop = ("<prop xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:caldav'>"
-            "<d:displayname/><c:calendar-color/></prop>")
+            "<d:displayname/><d:resourcetype/><c:calendar-color/></prop>")
     body = ("<?xml version='1.0'?>"
             "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
     r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
@@ -211,11 +214,13 @@ def caldav_calendars(creds):
         raise RuntimeError(f"calendars: HTTP {r.status_code}")
     out = []
     for m in re.finditer(
-            r"<d:response>\s*<d:href>([^<]+)</d:href>.*?<d:displayname>"
-            r"([^<]*)</d:displayname>.*?</d:response>",
+            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
             r.text, re.S):
-        url = m.group(1)
-        out.append({"name": m.group(2).strip(),
+        url, blk = m.group(1), m.group(2)
+        if not re.search(r"<c:calendar[/>]", blk):
+            continue  # the calendar-home set itself, not a calendar
+        dm = re.search(r"<d:displayname>([^<]*)</d:displayname>", blk)
+        out.append({"name": dm.group(1).strip() if dm else "",
                     "id": unquote(url.rstrip("/").rsplit("/", 1)[-1])
                     if "/" in url else ""})
     return out

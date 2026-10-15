@@ -535,6 +535,9 @@ c, b = http("/nc/bot1/ncx/calendars", headers=auth)
 check("/nc lists calendars (CalDAV PROPFIND)",
       c == 200 and {x["name"] for x in b.get("calendars", [])}
       == {"Family", "Work", "Privat", "Privat2"}, str(b))
+check("/nc does not offer the calendar-home collection as a calendar",
+      all(x["id"] != "u" for x in b.get("calendars", []))
+      and len(b.get("calendars", [])) == 4, str(b))
 c, b = http("/nc/bot1/ncx/calendars/Privat2?from=2026-10-15T00:00:00Z"
             "&to=2026-10-15T23:59:59Z", headers=auth)
 check("/nc calendar with a special id (space/parens) works by name",
