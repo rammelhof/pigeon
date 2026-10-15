@@ -19,9 +19,10 @@ from . import nc_proxy, scheduler, skills, tasks
 from .config import (BOTS_DIR, COMMIT, HEARTBEAT_INTERVAL, PI_CONFIG_DIR,
                      TALK_BOT_SECRET, VERSION, log)
 from .nextcloud import apply_file_param, payload_file_param, post_message
-from .pi import delete_session, pi_config_status
-from .room import BOT_NAME_RE, folder_for_room, handle_pw_command, \
-    room_dir, write_room_token
+from .pi import pi_config_status
+from .room import (BOT_NAME_RE, clean_session_and_workspace, folder_for_room,
+                   handle_bot_added, handle_bot_removed, handle_pw_command,
+                   room_dir, write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -62,11 +63,33 @@ def health():
 # --------------------------------------------------------------- webhook --
 
 def parse_payload(payload):
-    """Return (message, room, room_name, sender) or None
-    when the payload is not an actionable chat message.
-    room is the conversation token (from target.id)."""
+    """Normalise one ActivityPub webhook event into a dict:
+      action:    "message" | "bot_joined" | "bot_left"
+      room:      conversation token
+      room_name: display name of the room
+      bot_name:  Talk's bot name (joined/left only)
+      message:   chat text (message only)
+      sender:    sender display name (message only)
+    or None when the event is not one we handle.
+    Regular chat:  {type: Create, object: Note, target: Collection}
+    Bot join/leave: {type: Join|Leave, object: Collection} (no Note and
+    no target - the object IS the room)."""
     obj = payload.get("object") or {}
     target = payload.get("target") or {}
+
+    if payload.get("type") in ("Join", "Leave") \
+            and obj.get("type") == "Collection":
+        room_token = obj.get("id") or ""
+        if not re.fullmatch(r"[a-z0-9]{4,30}", room_token):
+            return None
+        actor = payload.get("actor") or {}
+        return {"action": "bot_joined" if payload["type"] == "Join"
+                else "bot_left",
+                "room": room_token,
+                "room_name": (obj.get("name") or "").strip(),
+                "bot_name": (actor.get("name") or "").strip(),
+                "message": "", "sender": "system"}
+
     if obj.get("type") == "Note" and target.get("type") == "Collection":
         room_token = target.get("id") or ""
         if not re.fullmatch(r"[a-z0-9]{4,30}", room_token):
@@ -79,8 +102,11 @@ def parse_payload(payload):
         except (json.JSONDecodeError, AttributeError):
             message = ""
         actor = payload.get("actor") or {}
-        return (message, room_token, (target.get("name") or "").strip(),
-                (actor.get("name") or "").strip() or "user")
+        return {"action": "message", "room": room_token,
+                "room_name": (target.get("name") or "").strip(),
+                "bot_name": "",
+                "message": message,
+                "sender": (actor.get("name") or "").strip() or "user"}
     return None
 
 
@@ -103,13 +129,34 @@ def webhook(bot):
 
     parsed = parse_payload(payload)
     if parsed is None:
-        return jsonify({"ignored": "not a chat message"}), 200
-    message, room, room_name, sender = parsed
-    if not message:
-        return jsonify({"ignored": "empty message"}), 200
+        return jsonify({"ignored": "not a handled event"}), 200
 
+    room = parsed["room"]
+    room_name = parsed["room_name"]
     folder = folder_for_room(room, room_name)
     cwd = room_dir(bot, folder)
+
+    # bot added to the room -> one-time greeting (no pi involved)
+    if parsed["action"] == "bot_joined":
+        os.makedirs(cwd, exist_ok=True)
+        write_room_token(cwd, room)  # needed for scheduled tasks to reply
+        reply = handle_bot_added(bot, room_name, cwd)
+        if reply:
+            post_message(room, reply)
+            return jsonify({"handled": "greet"}), 200
+        return jsonify({"ignored": "already greeted"}), 200
+
+    # bot removed from the room -> total clean (no pi involved)
+    if parsed["action"] == "bot_left":
+        handle_bot_removed(cwd)
+        return jsonify({"handled": "wiped"}), 200
+
+    # regular chat message from here on
+    message = parsed["message"]
+    if not message:
+        return jsonify({"ignored": "empty message"}), 200
+    sender = parsed["sender"]
+
     os.makedirs(cwd, exist_ok=True)
     write_room_token(cwd, room)  # needed for scheduled tasks to reply
 
@@ -119,14 +166,10 @@ def webhook(bot):
         post_message(room, reply)
         return jsonify({"handled": "/pw"}), 200
 
-    # room command: /clean -> drop the room's pi session files, so the
-    # next message starts a fresh session (no old history in the context)
+    # room command: /clean -> drop the pi sessions AND wipe the workspace,
+    # so the next message starts a fresh pi session with no files behind
     if message == "/clean":
-        n = delete_session(f"{bot}_{folder}", os.path.join(cwd, "workspace"))
-        post_message(room,
-                     "\u2705 pi session cleared \u2014 the next message starts "
-                     "a fresh pi session" if n else
-                     "no pi session in this room yet \u2014 nothing to clear")
+        post_message(room, clean_session_and_workspace(cwd))
         return jsonify({"handled": "/clean"}), 200
 
     configured, config_file = pi_config_status()

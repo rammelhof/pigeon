@@ -4,7 +4,8 @@ Run:  python test/smoke.py
 Covers: pi-config gate, HMAC webhook verification, payload parsing,
 queueing, pi JSONL parsing (thinking + answer), posting via the bot API
 (with outgoing signature verification), retry with --continue, heartbeat
-timeout kill, /health output.
+timeout kill, /health output, /pw, /clean (session + workspace wipe),
+bot Join (one-time greeting) / Leave (total room wipe) webhooks.
 """
 import hashlib
 import hmac
@@ -60,6 +61,11 @@ for _name in ("bwrap", "bwrap.exe"):
         pass
 os.environ["PATH"] = FAKE_BIN + os.pathsep + os.environ["PATH"]
 os.makedirs(PI_CFG, exist_ok=True)  # auth.json created later
+
+# fresh state every run (the suite is not idempotent otherwise)
+shutil.rmtree(BOTS_TEST, ignore_errors=True)
+shutil.rmtree(PI_CFG, ignore_errors=True)
+os.makedirs(PI_CFG, exist_ok=True)
 
 
 # fake pi ------------------------------------------------------------------
@@ -405,8 +411,8 @@ check("/pw status reply: configured",
       any("configured for user: ncuser" in m for m in posted),
       str(posted)[:200])
 
-# 4b2. /clean room command: drops the room's pi session files, so the
-# next message starts a fresh pi session
+# 4b2. /clean room command: drops the pi sessions AND wipes the workspace,
+# so the next message starts a fresh pi session with no files behind
 clean_ws = os.path.join(BOTS_TEST, "bot1", "rooms", "clean-room",
                         "workspace")
 sdir = session_dir(clean_ws)
@@ -414,6 +420,9 @@ os.makedirs(sdir, exist_ok=True)
 old_session = os.path.join(sdir, "2026-01-01T00-00-00Z_bot1_clean-room.jsonl")
 with open(old_session, "w") as f:
     f.write('{"type":"session","version":3}\n')
+os.makedirs(clean_ws, exist_ok=True)
+with open(os.path.join(clean_ws, "leftover.txt"), "w") as f:
+    f.write("junk")
 s, body = signed_webhook("bot1", new_payload("/clean",
                                              room_token="cleanrm0001",
                                              room_name="Clean Room"))
@@ -421,8 +430,10 @@ check("/clean: handled, not queued",
       s == 200 and body.get("handled") == "/clean", str(body))
 check("/clean deleted the old pi session file",
       not os.path.exists(old_session) and os.path.isdir(sdir))
+check("/clean wiped the workspace dir", not os.path.exists(clean_ws))
 posted = [m for r, m in nc_stub.H.received if r == "cleanrm0001"]
-check("/clean reply posted", any("cleared" in m for m in posted),
+check("/clean reply posted",
+      any("cleared" in m and "wiped the workspace" in m for m in posted),
       str(posted)[:200])
 s, body = signed_webhook("bot1", new_payload("/clean",
                                              room_token="cleanrm0001",
@@ -432,6 +443,75 @@ check("/clean twice: nothing to clear",
       body.get("handled") == "/clean" and any("nothing to clear" in m
                                               for m in posted),
       str(posted)[:200])
+
+# 4b3. bot join/leave webhooks: one-time greeting + total clean on leave
+# (Talk BotController enable/disable -> Join/Leave ActivityPub events)
+def join_leave_payload(room_token, room_name, join=True, bot_name="Pigeon"):
+    return {
+        "type": "Join" if join else "Leave",
+        "actor": {"type": "Application", "id": "bots/bot-abc123",
+                  "name": bot_name},
+        "object": {"type": "Collection", "id": room_token,
+                   "name": room_name},
+        "published": "2026-10-12T11:21:23+00:00",
+    }
+
+greet_room_dir = os.path.join(BOTS_TEST, "bot1", "rooms", "greet-room")
+s, body = signed_webhook("bot1",
+                         join_leave_payload("greetrm0001", "Greet Room"))
+check("Join: greeted", s == 200 and body.get("handled") == "greet",
+      str(body))
+posted = [m for r, m in nc_stub.H.received if r == "greetrm0001"]
+check("Join: greeting posted",
+      len(posted) == 1 and "I'm bot1" in posted[0] and "Greet Room" in posted[0],
+      str(posted)[:200])
+with open(os.path.join(greet_room_dir, ".room.json")) as f:
+    meta = json.load(f)
+check("Join: greeted flag stored in .room.json",
+      meta.get("greeted") is True, str(meta))
+s, body = signed_webhook("bot1",
+                         join_leave_payload("greetrm0001", "Greet Room"))
+posted = [m for r, m in nc_stub.H.received if r == "greetrm0001"]
+check("Join twice: ignored, no second greeting",
+      s == 200 and body.get("ignored") == "already greeted" and len(posted) == 1,
+      f"{body} {posted[:1]}")
+
+# Leave: room with stored password + workspace file + pi session -> wiped
+leave_room_dir = os.path.join(BOTS_TEST, "bot1", "rooms", "leave-room")
+leave_ws = os.path.join(leave_room_dir, "workspace")
+os.makedirs(leave_ws, exist_ok=True)
+with open(os.path.join(leave_ws, "leftover.txt"), "w") as f:
+    f.write("junk")
+s, body = signed_webhook("bot1",
+                         new_payload("/pw ncuser pw12345",
+                                     room_token="leaverm0001",
+                                     room_name="Leave Room"))
+check("Leave setup: /pw stored",
+      s == 200 and body.get("handled") == "/pw", str(body))
+leave_sdir = session_dir(leave_ws)
+os.makedirs(leave_sdir, exist_ok=True)
+old_leave_session = os.path.join(
+    leave_sdir, "2026-01-02T00-00-00Z_bot1_leave-room.jsonl")
+with open(old_leave_session, "w") as f:
+    f.write('{"type":"session","version":3}\n')
+posts_before = sum(1 for r, m in nc_stub.H.received if r == "leaverm0001")
+s, body = signed_webhook("bot1",
+                         join_leave_payload("leaverm0001", "Leave Room",
+                                            join=False))
+check("Leave: wiped", s == 200 and body.get("handled") == "wiped",
+      str(body))
+check("Leave: whole room folder gone",
+      not os.path.exists(leave_room_dir))
+check("Leave: pi session file gone", not os.path.exists(old_leave_session))
+check("Leave: nothing posted (bot is out of the room)",
+      sum(1 for r, m in nc_stub.H.received if r == "leaverm0001")
+      == posts_before)
+# Leave on a room we never heard of: no-op, still 200
+s, body = signed_webhook("bot1",
+                         join_leave_payload("ghostrm001", "Ghost Room",
+                                            join=False))
+check("Leave on unknown room: ok, no crash",
+      s == 200 and body.get("handled") == "wiped", str(body))
 
 # 4c. file message without app password -> pi is instructed (user language)
 directs_before = len(nc_stub.H.search_calls)

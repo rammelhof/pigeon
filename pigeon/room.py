@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import shutil
 import threading
 
 from .config import BOTS_DIR, log
@@ -156,3 +157,80 @@ def handle_pw_command(message, cwd, room):
                 "/pw <nextcloud-user> <app-password> to enable file "
                 "downloads.")
     return None
+
+
+# ------------------------------------------------------------ /clean cmd --
+# Stored per room; the command never reaches pi. /clean drops the pi
+# session AND wipes the room's workspace completely (fresh pi session
+# with no files left behind).
+
+def clean_session_and_workspace(cwd):
+    """Drop this room's pi sessions and wipe the non-empty workspace dir.
+    Returns the reply to post in the room."""
+    from .pi import wipe_sessions  # local import: pi depends on room
+    ws = os.path.join(cwd, "workspace")
+    had_ws = os.path.isdir(ws) and bool(os.listdir(ws))
+    removed = wipe_sessions(ws)
+    if os.path.isdir(ws):
+        shutil.rmtree(ws, ignore_errors=True)
+    cleared = bool(removed) or had_ws
+    if cleared:
+        extra = ", wiped the workspace" if had_ws else ""
+        return (f"pi session cleared: removed {removed} pi session "
+                f"file(s){extra}. The next message starts a fresh pi "
+                "session.")
+    return ("no pi session in this room and the workspace is empty \u2014 "
+            "nothing to clear.")
+
+
+# ------------------------------------------------------- bot lifecycle ----
+# Talk sends dedicated ActivityPub events when this bot is added to or
+# removed from a room (BotController enable/disable -> Join / Leave
+# webhooks). They are scoped to this bot's webhook URL, so no name
+# matching is needed: a Join here means "we were added to that room".
+
+GREETING_FMT = (
+    "Hi {room}, I'm {bot} \u2014 I run the pi coding agent in this room. "
+    "Send /pw <nextcloud-user> <app-password> to enable Nextcloud file "
+    "access, or /clean to reset my memory."
+)
+
+
+def _meta_greeted(cwd):
+    return bool(room_meta_read(cwd).get("greeted"))
+
+
+def mark_greeted(cwd):
+    meta = room_meta_read(cwd)
+    meta["greeted"] = True
+    room_meta_write(cwd, meta)
+
+
+def handle_bot_added(bot, room_name, cwd):
+    """Join webhook: post the one-time greeting. Returns the message to
+    post, or None when this room was already greeted."""
+    if _meta_greeted(cwd):
+        return None
+    mark_greeted(cwd)
+    log.info("bot added to room %s", room_name or os.path.basename(cwd))
+    return GREETING_FMT.format(room=room_name or "there", bot=bot)
+
+
+def handle_bot_removed(cwd):
+    """Leave webhook: total clean of the room (pi sessions + workspace +
+    .room.json credentials + pending queue). Returns True."""
+    wipe_room(cwd)
+    return True
+
+
+def wipe_room(cwd):
+    """Remove the room folder AND its pi session files (which live in
+    PI_CONFIG_DIR, outside the room dir)."""
+    from .pi import wipe_sessions  # local import: pi depends on room
+    wipe_sessions(os.path.join(cwd, "workspace"))
+    if os.path.isfile(_state_path(cwd)):
+        # drop pending queue + running job first, so a concurrent worker
+        # does not resurrect the folder from its state file
+        state_update(cwd, lambda s: s.update(pending=[], running=None))
+    shutil.rmtree(cwd, ignore_errors=True)
+    log.info("room wiped: %s", cwd)

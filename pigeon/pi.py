@@ -114,6 +114,18 @@ def delete_session(session_id, workspace):
     return len(files)
 
 
+def wipe_sessions(workspace):
+    """Delete every pi session of this workspace, so the room starts
+    with no history at all. Returns the number of files removed."""
+    d = session_dir(workspace)
+    if not os.path.isdir(d):
+        return 0
+    files = glob.glob(os.path.join(d, "*.jsonl"))
+    for f in files:
+        os.remove(f)
+    return len(files)
+
+
 def extract_answer_and_thinking(task):
     """Answer = text blocks of the LAST assistant message_end event.
     Thinking was collected from the event stream into task['_thinking']."""
