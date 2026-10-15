@@ -137,32 +137,64 @@ class H(BaseHTTPRequestHandler):
             return
         H.put_calls.append(("PROPFIND", self.path))
         if self.path.startswith("/remote.php/dav/calendars/"):
-            cal = self.path.rstrip("/").rsplit("/", 1)[-1]
-            # Nextcloud's Depth-1 answer contains the calendar-home
-            # collection itself first (resourcetype calendar-home-set, NOT
-            # a calendar — accessing it 404s), then one response per
-            # real calendar (resourcetype c:calendar). Note: the prefix
-            # here is 'cal', deliberately different from the 'c' the
-            # client requests — servers pick their own prefixes.
-            xml = ('<d:multistatus xmlns:d="DAV:" '
-                   'xmlns:cal="urn:ietf:params:xml:ns:caldav">'
-                   '<d:response><d:href>/remote.php/dav/calendars/u/'
-                   '</d:href><d:propstat><d:prop>'
-                   '<d:displayname>u</d:displayname>'
-                   '<d:resourcetype><d:collection/>'
-                   '<cal:calendar-home-set/></d:resourcetype></d:prop>'
-                   '<d:status>HTTP/1.1 200 OK</d:status>'
-                   '</d:propstat></d:response>'
-                   + "".join(
-                       f"<d:response><d:href>/remote.php/dav/calendars/"
-                       f"u/{c}/</d:href><d:propstat><d:prop>"
-                       f"<d:displayname>{n}</d:displayname>"
-                       f"<d:resourcetype><d:collection/><cal:calendar/>"
-                       f"</d:resourcetype></d:prop>"
-                       f"<d:status>HTTP/1.1 200 OK</d:status>"
-                       f"</d:propstat></d:response>"
-                       for c, n in H.calendars.items())
-                   + "</d:multistatus>")
+            # /remote.php/dav/calendars/<user>            -> principal
+            # /remote.php/dav/calendars/<user>/<cal>[/]   -> one calendar
+            parts = self.path.rstrip("/").split("/")
+            if len(parts) == 5:
+                # Depth-1 on the principal: list the calendars.
+                # Nextcloud's answer contains the calendar-home
+                # collection itself first (resourcetype
+                # calendar-home-set, NOT a calendar — accessing it
+                # 404s), then one response per real calendar
+                # (resourcetype c:calendar). Note: the prefix here is
+                # 'cal', deliberately different from the 'c' the client
+                # requests — servers pick their own prefixes.
+                xml = ('<d:multistatus xmlns:d="DAV:" '
+                       'xmlns:cal="urn:ietf:params:xml:ns:caldav">'
+                       '<d:response><d:href>/remote.php/dav/calendars/u/'
+                       '</d:href><d:propstat><d:prop>'
+                       '<d:displayname>u</d:displayname>'
+                       '<d:resourcetype><d:collection/>'
+                       '<cal:calendar-home-set/></d:resourcetype></d:prop>'
+                       '<d:status>HTTP/1.1 200 OK</d:status>'
+                       '</d:propstat></d:response>'
+                       + "".join(
+                           f"<d:response><d:href>/remote.php/dav/calendars/"
+                           f"u/{c}/</d:href><d:propstat><d:prop>"
+                           f"<d:displayname>{n}</d:displayname>"
+                           f"<d:resourcetype><d:collection/>"
+                           f"<cal:calendar/></d:resourcetype></d:prop>"
+                           f"<d:status>HTTP/1.1 200 OK</d:status>"
+                           f"</d:propstat></d:response>"
+                           for c, n in H.calendars.items())
+                       + "</d:multistatus>")
+            else:
+                cal = parts[-1]
+                # Depth-1 on one calendar: one response per event,
+                # ICS body as cal:calendar-data (XML escaped) — this is
+                # what pigeon fetches with (plain GET answers a
+                # placeholder HTML page, REPORTs are broken).
+                from xml.sax.saxutils import escape
+                xml = ('<d:multistatus xmlns:d="DAV:" '
+                       'xmlns:cal="urn:ietf:params:xml:ns:caldav">'
+                       + "".join(
+                           '<d:response><d:href>/remote.php/dav/'
+                           f'calendars/u/{cal}/{e["uid"]}.ics</d:href>'
+                           '<d:propstat><d:prop>'
+                           '<cal:calendar-data>'
+                           + escape(
+                               "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"
+                               "BEGIN:VEVENT\r\n"
+                               f'UID:{e["uid"]}\r\n'
+                               f'SUMMARY:{e.get("summary", "")}\r\n'
+                               f'DTSTART:{e.get("start", "20260101T000000Z")}\r\n'
+                               f'DTEND:{e.get("end", "20260101T010000Z")}\r\n'
+                               "END:VEVENT\r\nEND:VCALENDAR\r\n")
+                           + '</cal:calendar-data></d:prop>'
+                           '<d:status>HTTP/1.1 200 OK</d:status>'
+                           '</d:propstat></d:response>'
+                           for e in H.events.get(cal, []))
+                       + "</d:multistatus>")
         else:  # webdav dir listing
             root = self.path[len("/remote.php/webdav/"):] .rstrip("/")
             resp = []

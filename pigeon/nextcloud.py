@@ -18,6 +18,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote
+from xml.sax.saxutils import unescape
 
 import requests
 
@@ -304,27 +305,17 @@ def _rfc3339(value):
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def caldav_events(creds, calid, t_from, t_to):
-    """Events of a calendar overlapping [t_from, t_to) as plain dicts
-    (RFC3339 in). Fetches the whole calendar (GET) and filters locally —
-    a universally supported operation; Nextcloud's calendar-query REPORT
-    returns HTTP 500 in many versions."""
-    calid = caldav_resolve(creds, calid)
-    r = requests.get(f"{caldav_base(creds[0])}/{calid}/", auth=creds,
-                     headers={"Accept": "text/calendar"}, timeout=60)
-    _dbg(r, f"GET calendar {calid}")
-    if r.status_code != 200:
-        raise RuntimeError(f"events: HTTP {r.status_code}")
-    text = re.sub(r"\r?\n[ \t]", "", r.text)  # unfold ICS continuation
-    t_from, t_to = _rfc3339(t_from), _rfc3339(t_to)
-    if t_from is None or t_to is None:
-        raise RuntimeError(f"bad time range: {(t_from, t_to)}")
-    evs = []
+def _vevents(ics):
+    """All VEVENTs of an ICS text as dicts. The start/end keys hold the
+    raw ICS values (what the client should show); _start/_end are the
+    parsed naive datetimes used for the range filter."""
+    text = re.sub(r"\r?\n[ \t]", "", ics)  # unfold ICS continuation
+    out = []
     for m in re.finditer(r"BEGIN:VEVENT(.*?)END:VEVENT", text, re.S):
         blk = m.group(1)
 
-        def g(tag):
-            mm = re.search(r"^" + tag + r"[;:](.*)$", blk, re.M | re.I)
+        def g(tag, _blk=blk):
+            mm = re.search(r"^" + tag + r"[;:](.*)$", _blk, re.M | re.I)
             return mm.group(1).strip() if mm else ""
 
         start = _ics_dt(g("DTSTART"))
@@ -336,11 +327,45 @@ def caldav_events(creds, calid, t_from, t_to):
         # local wall clock (all-day or no TZ) vs UTC range: widen the day
         if re.fullmatch(r"\d{8}", g("DTSTART")) is not None:  # all-day
             start, end = start, start + timedelta(days=1)
-        if not (start < t_to and end >= t_from):
-            continue
-        evs.append({"summary": g("SUMMARY"), "start": g("DTSTART"),
+        out.append({"summary": g("SUMMARY"), "start": g("DTSTART"),
                     "end": g("DTEND"), "location": g("LOCATION"),
-                    "description": g("DESCRIPTION")})
+                    "description": g("DESCRIPTION"), "uid": g("UID"),
+                    "_start": start, "_end": end})
+    return out
+
+
+def caldav_events(creds, calid, t_from, t_to):
+    """Events of a calendar overlapping [t_from, t_to) as plain dicts.
+    One PROPFIND (Depth 1) asks for c:calendar-data of every event —
+    universally supported. It works where the alternatives do not:
+    calendar-query REPORT is broken on many Nextcloud versions
+    (HTTP 500/400) and a plain GET on the calendar path answers a
+    placeholder HTML page instead of ICS."""
+    calid = caldav_resolve(creds, calid)
+    t_from, t_to = _rfc3339(t_from), _rfc3339(t_to)
+    if t_from is None or t_to is None:
+        raise RuntimeError(f"bad time range: {(t_from, t_to)}")
+    body = ("<?xml version='1.0'?>"
+            "<d:propfind xmlns:d='DAV:' "
+            "xmlns:c='urn:ietf:params:xml:ns:caldav'>"
+            "<d:prop><c:calendar-data/></d:prop></d:propfind>")
+    r = requests.request("PROPFIND", f"{caldav_base(creds[0])}/{calid}/",
+                         auth=creds, data=body.encode(),
+                         headers={"Depth": "1", "Content-Type": "text/xml"},
+                         timeout=120)
+    _dbg(r, f"PROPFIND events of {calid}")
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"events: HTTP {r.status_code}")
+    evs = []
+    for blk in re.findall(r"<d:response>(.*?)</d:response>", r.text, re.S):
+        dm = re.search(r"<\w+:calendar-data>(.*?)</\w+:calendar-data>",
+                       blk, re.S)
+        if not dm:
+            continue
+        for e in _vevents(unescape(dm.group(1))):
+            if e["_start"] < t_to and e["_end"] >= t_from:
+                evs.append({k: v for k, v in e.items()
+                            if not k.startswith("_")})
     return evs
 
 
