@@ -645,8 +645,9 @@ check("transcription POSTed with api key, model + file",
                                      vsaved[0] if vsaved else None),
       str(nc_stub.H.stt_calls))
 voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
-check("transcribed text posted back to the room",
-      nc_stub.H.stt_text in voic_posts, str(voic_posts)[:200])
+check("transcribed text posted back with an ear emoji",
+      any(m.startswith("👂 ") and nc_stub.H.stt_text in m
+          for m in voic_posts), str(voic_posts)[:200])
 t = wait_room_done("bot1/rooms/voice-room")
 check("voice task done", bool(t) and t["status"] == "done", str(t))
 check("pi got the transcribed text (not the wav)",

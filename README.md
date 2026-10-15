@@ -66,7 +66,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   with an
   OpenAI-compatible STT endpoint
   (`POST {endpoint}/v1/audio/transcriptions` with `model` + `file`),
-  posts the extracted text back to the room and queues that text for pi
+  posts the extracted text (prefixed with 👂) back to the room and queues
+  that text for pi
   — the raw audio never reaches pi. The endpoint, model and API key are
   configured in **`.pigeon.json` in the bots root folder** (created as an
   empty boilerplate at startup when missing):

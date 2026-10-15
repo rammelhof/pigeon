@@ -255,7 +255,7 @@ def handle_voice_message(bot, folder, room, f, cwd, sender):
         post_message(room, f"⚠ Transcription failed: {e}")
         return jsonify({"error": "transcription failed"}), 502
 
-    post_message(room, text)
+    post_message(room, "👂 " + text)
     key = f"{bot}/{folder}"
     tasks.enqueue(key, bot, {
         "room": room,
