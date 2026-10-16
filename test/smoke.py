@@ -69,10 +69,28 @@ os.makedirs(PI_CFG, exist_ok=True)
 
 
 # fake pi ------------------------------------------------------------------
+# GOOD mimics a real pi stream: thinking arrives as message_update
+# thinking_start/delta/end events and is repeated authoritatively in the
+# assistant message_end (run_pi_once must dedupe it)
 GOOD = [
     json.dumps({"type": "session_header", "id": "f1", "version": "1"}),
     json.dumps({"type": "message_end",
                 "message": {"role": "user", "content": "x"}}),
+    json.dumps({"type": "message_update",
+                "assistantMessageEvent": {"type": "thinking_start",
+                                          "contentIndex": 0}}),
+    json.dumps({"type": "message_update",
+                "assistantMessageEvent": {"type": "thinking_delta",
+                                          "contentIndex": 0,
+                                          "delta": "step one\n"}}),
+    json.dumps({"type": "message_update",
+                "assistantMessageEvent": {"type": "thinking_delta",
+                                          "contentIndex": 0,
+                                          "delta": "step two"}}),
+    json.dumps({"type": "message_update",
+                "assistantMessageEvent": {"type": "thinking_end",
+                                          "contentIndex": 0,
+                                          "content": "step one\nstep two"}}),
     json.dumps({"type": "message_end",
                 "message": {"role": "assistant",
                             "content": [
@@ -582,6 +600,53 @@ check("file path added in front of the text message",
       prompt is not None and saved2[0] in prompt
       and prompt.index("chat/files/") < prompt.index("I send 2 test files."),
       str(prompt)[:200])
+
+# 4d3. live thinking bubble: room WITH an app password -> the thinking is
+# posted as ONE message (as the app-password user, bot API cannot edit)
+# and edited in place while pi thinks
+s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+                                             room_token="bubrm0001",
+                                             room_name="Bubble Room"))
+check("bubble setup: /pw stored", s == 200 and body.get("handled") == "/pw",
+      str(body))
+sent_before = len(nc_stub.H.chat_sent)
+s, body = signed_webhook("bot1", new_payload("think out loud",
+                                             room_token="bubrm0001",
+                                             room_name="Bubble Room"))
+check("bubble msg 202", s == 202, str(s))
+t = wait_room_done("bot1/rooms/bubble-room")
+check("bubble task done", bool(t) and t["status"] == "done", str(t))
+bub_lookups = [c for c in nc_stub.H.chat_lookups if c[0] == "bubrm0001"]
+check("bubble: room resolved by token with the room credentials",
+      bub_lookups and bub_lookups[-1][1] == "ncuser",
+      str(nc_stub.H.chat_lookups))
+sent = nc_stub.H.chat_sent[sent_before:]
+check("bubble: exactly one initial 'thinking…' message (no spam)",
+      len(sent) == 1
+      and sent[0] == (nc_stub.H.chat_room_id, "\U0001f914 *thinking\u2026*"),
+      str(sent))
+edits = nc_stub.H.chat_edits
+check("bubble: edited in place with the streamed thinking",
+      bool(edits) and all(e[2].startswith("\U0001f914 ") for e in edits)
+      and any("> step one" in e[2] and "> step two" in e[2]
+              for e in edits),
+      str(edits)[:300])
+check("bubble: final edit carries the full thinking",
+      bool(edits) and "> step one" in edits[-1][2]
+      and "> step two" in edits[-1][2],
+      str(edits[-1][2])[:200] if edits else "")
+check("bubble: the answer still goes out via the bot API",
+      any(room == "bubrm0001" and "hello from fake pi" in m
+          for room, m in nc_stub.H.received))
+check("bubble: no thinking quote posted via bot API for the credentialed room",
+      not any(room == "bubrm0001" and "\U0001f914" in m
+              for room, m in nc_stub.H.received))
+print("DEBUG assibot posts:", [m for r, m in nc_stub.H.received if r == "assibot"])
+check("bubble fallback: room without app password keeps the classic thinking quote",
+      any(room == "ho5w45n9" and "\U0001f914" in m and "step one" in m
+          for room, m in nc_stub.H.received)
+      and all(tok != "ho5w45n9" for tok, _ in nc_stub.H.chat_lookups),
+      str(nc_stub.H.chat_lookups))
 
 # 4e. voice message (audio/wav) -> STT transcription -> posted + to pi
 stt_json = os.path.join(BOTS_TEST, ".pigeon.json")

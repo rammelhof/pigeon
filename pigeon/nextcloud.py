@@ -17,7 +17,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from xml.sax.saxutils import unescape
 
 import requests
@@ -38,6 +38,49 @@ def post_message(room, message):
                       headers=headers, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")
+
+
+# --- Talk chat web API (as the app-password user) -----------------------
+#
+# The bot API can POST but not EDIT messages, so the live thinking bubble
+# is posted as the room's app-password user and edited in place via the
+# regular chat web API.
+
+_CHAT = {"OCS-APIRequest": "true", "Accept": "application/json"}
+
+
+def _ocs_data(r, what):
+    if r.status_code >= 400:
+        raise RuntimeError(f"{what} failed: {r.status_code} {r.text[:200]}")
+    data = (r.json().get("ocs", {}) or {}).get("data") or {}
+    if not data:
+        raise RuntimeError(f"{what} failed: empty ocs data {r.text[:200]}")
+    return data
+
+
+def chat_room_id(creds, room_token):
+    """Numeric room id for the chat web API (resolve the room by token)."""
+    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v4/room/{quote(room_token)}"
+    data = _ocs_data(requests.get(url, auth=creds, headers=_CHAT, timeout=15),
+                     "room by token")
+    return data["id"]
+
+
+def chat_send(creds, room_id, text):
+    """Post a chat message as the app-password user. Returns the message id."""
+    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v4/chat/{room_id}"
+    data = _ocs_data(requests.post(url, auth=creds, headers=_CHAT,
+                                   data={"message": text}, timeout=15),
+                     "chat send")
+    return data["id"]
+
+
+def chat_edit(creds, room_id, message_id, text):
+    """Edit one of our chat messages in place (live thinking bubble)."""
+    url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v4/"
+           f"chat/{room_id}/{message_id}")
+    _ocs_data(requests.put(url, auth=creds, headers=_CHAT,
+                           data={"message": text}, timeout=15), "chat edit")
 
 
 # ------------------------------------------------------------ files -------
