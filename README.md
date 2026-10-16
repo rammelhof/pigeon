@@ -298,7 +298,11 @@ docker-compose.yml
 LICENSE           MIT
 bots/             one folder per bot (bind mount), rooms/ inside
 docs/docker.md    docker + pi configuration documentation
-test/smoke.py     local end-to-end test with fake pi + fake Nextcloud
+test/smoke.py     local end-to-end test entry point (starts fakes, runs the
+                  sections in test/sections/ in order)
+test/harness.py   shared test setup: fake pi, env, helpers (import = running)
+test/sections/    one module per topic: basic, message, room, files, thinking,
+                  voice, ncproxy, pipeline, restart, scheduler, skills
 test/nc_stub.py   fake Nextcloud (bot API, verifies outgoing signatures)
 ```
 
