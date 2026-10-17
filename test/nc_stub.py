@@ -41,6 +41,7 @@ class H(BaseHTTPRequestHandler):
     chat_lookups = []   # (room_token, authed_user)
     chat_sent = []      # (room_id, message, silent)
     chat_edits = []     # (room_id, message_id, message)
+    bot_silent = []     # (room_token, silent) — bot API posts
     _chat_next_id = 9000
     _chat_counter_lock = None
 
@@ -388,6 +389,9 @@ class H(BaseHTTPRequestHandler):
                   flush=True)
             H.received.append((self.path.split("/bot/")[1].split("/")[0],
                                message))
+            H.bot_silent.append(
+                (self.path.split("/bot/")[1].split("/")[0],
+                 bool(json.loads(body).get("silent", False))))
             self._json({"ok": True}, code=201)
         else:
             self._json({"ok": True})

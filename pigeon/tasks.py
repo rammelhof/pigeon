@@ -156,7 +156,8 @@ def run_job(key, bot, job):
                 if bubble is not None:
                     bubble_update(thinking, force=True)
                 else:
-                    post_message(job["room"], f"\U0001f914 {quoted(thinking)}")
+                    post_message(job["room"], f"\U0001f914 {quoted(thinking)}",
+                                 silent=True)
             post_message(job["room"], answer)
             task["status"] = "done"
             break

@@ -27,14 +27,18 @@ from .room import room_creds
 from .security import sign_request
 
 
-def post_message(room, message):
+def post_message(room, message, silent=False):
     """Post a chat message via the signed Talk bot API
     (https://nextcloud-talk.readthedocs.io/en/latest/bots/).
-    room must be the conversation token."""
+    room must be the conversation token. silent=True suppresses chat
+    notifications (the bot API's own 'silent' flag, Talk 17.1+)."""
     url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
            f"/bot/{room}/message")
     headers = sign_request(TALK_BOT_SECRET, message)  # sign raw message
-    r = requests.post(url, data=json.dumps({"message": message}).encode(),
+    body = {"message": message}
+    if silent:
+        body["silent"] = True
+    r = requests.post(url, data=json.dumps(body).encode(),
                       headers=headers, timeout=30)
     if r.status_code >= 400:
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")

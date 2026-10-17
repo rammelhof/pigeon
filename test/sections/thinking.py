@@ -54,3 +54,7 @@ def run():
               for room, m in nc_stub.H.received)
           and all(tok != "ho5w45n9" for tok, _ in nc_stub.H.chat_lookups),
           str(nc_stub.H.chat_lookups))
+    check("fallback thinking quote is silent too (bot API silent flag)",
+          any(tok == "ho5w45n9" and sil
+              for tok, sil in nc_stub.H.bot_silent),
+          str(nc_stub.H.bot_silent))

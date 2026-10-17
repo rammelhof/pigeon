@@ -43,10 +43,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   (throttled to ~3 s between edits). The Talk bot API can only *post*, never
   *edit*, so the bubble is sent as the room's app-password user via the
   regular chat web API (`…/api/v4/room/<token>` → id, `…/api/v4/chat/<id>`);
-  the final answer still goes out as the bot. Thinking is posted **silent**
-  (`silent=1`, no notification in Talk). Rooms without an app password fall
-  back to one `🤔`-quoted thinking message via the bot API — that one
-  notifies, since the bot API has no silent option.
+  the final answer still goes out as the bot. Thinking is always posted
+  **silent** (no notification in Talk): the bubble via the chat API's
+  `silent=1`, and the fallback `🤔`-quoted thinking message — for rooms
+  without an app password — via the bot API's own `silent` flag
+  (Talk 17.1+).
 * **File attachments** (per-room, isolated): Talk sends files as a
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's
