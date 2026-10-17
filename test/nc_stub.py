@@ -39,7 +39,7 @@ class H(BaseHTTPRequestHandler):
     # returns this numeric id; sends/edits are recorded
     chat_room_id = 5757
     chat_lookups = []   # (room_token, authed_user)
-    chat_sent = []      # (room_id, message)
+    chat_sent = []      # (room_id, message, silent)
     chat_edits = []     # (room_id, message_id, message)
     _chat_next_id = 9000
     _chat_counter_lock = None
@@ -342,9 +342,11 @@ class H(BaseHTTPRequestHandler):
             if not self._dav_ok():
                 self._json({"error": "unauthorized"}, code=401)
                 return
-            text = urllib.parse.parse_qs(self._body()).get("message", [""])[0]
+            qs = urllib.parse.parse_qs(self._body())
+            text = qs.get("message", [""])[0]
+            silent = qs.get("silent", ["0"])[0] == "1"
             H._chat_next_id += 1
-            H.chat_sent.append((int(m.group(1)), text))
+            H.chat_sent.append((int(m.group(1)), text, silent))
             self._json({"ocs": {"meta": {"status": "ok"},
                                 "data": {"id": H._chat_next_id,
                                          "message": text}}})

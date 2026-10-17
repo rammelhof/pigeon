@@ -101,7 +101,8 @@ def run_job(key, bot, job):
     if creds:
         try:
             rid = chat_room_id(creds, job["room"])
-            mid = chat_send(creds, rid, "\U0001f914 *thinking…*")
+            mid = chat_send(creds, rid, "\U0001f914 *thinking…*",
+                            silent=True)
             bubble = {"creds": creds, "room_id": rid, "message_id": mid}
         except Exception as e:
             log.warning("task %s: no thinking bubble: %s", task["id"], e)

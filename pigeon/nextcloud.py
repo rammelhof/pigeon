@@ -66,11 +66,15 @@ def chat_room_id(creds, room_token):
     return data["id"]
 
 
-def chat_send(creds, room_id, text):
-    """Post a chat message as the app-password user. Returns the message id."""
+def chat_send(creds, room_id, text, silent=False):
+    """Post a chat message as the app-password user (silent = no
+    notification in Talk). Returns the message id."""
     url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v4/chat/{room_id}"
+    data = {"message": text}
+    if silent:
+        data["silent"] = "1"
     data = _ocs_data(requests.post(url, auth=creds, headers=_CHAT,
-                                   data={"message": text}, timeout=15),
+                                   data=data, timeout=15),
                      "chat send")
     return data["id"]
 

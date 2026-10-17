@@ -28,8 +28,11 @@ def run():
     sent = nc_stub.H.chat_sent[sent_before:]
     check("bubble: exactly one initial 'thinking…' message (no spam)",
           len(sent) == 1
-          and sent[0] == (nc_stub.H.chat_room_id, "\U0001f914 *thinking\u2026*"),
+          and sent[0][:2] == (nc_stub.H.chat_room_id,
+                              "\U0001f914 *thinking…*"),
           str(sent))
+    check("bubble: thinking posted silently (no notification in Talk)",
+          bool(sent) and sent[0][2] is True, str(sent))
     edits = nc_stub.H.chat_edits
     check("bubble: edited in place with the streamed thinking",
           bool(edits) and all(e[2].startswith("\U0001f914 ") for e in edits)
