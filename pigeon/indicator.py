@@ -1,18 +1,17 @@
-"""Live progress indicator: a bot reaction on the user's chat message,
-updated as the job progresses — event-driven, not timer-driven:
+"""Live progress indicator: a bot reaction on the user's chat message.
+Event-driven, add-only:
 
-    webhook message received   -> thumbs up
-    pi agent started           -> robot (and then it stays; reactions
-                                   are only ever set, never removed,
-                                   because removal would notify again)
+    pi agent started           -> robot (and then it stays)
 
-Reactions are deliberately NOT changed while pi thinks — any reaction
-change reaches the room as a notification.
+Nothing else: no reaction when the webhook receives the message,
+nothing while pi thinks, nothing when the run finishes. Reactions are
+only ever set, never removed — any reaction change reaches the room
+as a notification, so the indicator stays as quiet as possible.
 
-The Talk API calls happen in one small thread fed by a queue, so the
-webhook and the worker never block on HTTP. Any API error (e.g. an
-older Talk without the bot reaction endpoints) disables the indicator
-for good — the run itself is never affected.
+The Talk API call happens in one small thread fed by a queue, so the
+worker never blocks on HTTP. Any API error (e.g. an older Talk without
+the bot reaction endpoints) disables the indicator for good — the run
+itself is never affected.
 """
 
 import queue
@@ -21,13 +20,12 @@ import threading
 from .config import log
 from .nextcloud import react
 
-EMOJI_RECEIVED = "\U0001f44d"  # 👍 message received
-EMOJI_STARTED = "\U0001f916"   # 🤖 pi agent started
+EMOJI_STARTED = "\U0001f916"  # 🤖 pi agent started
 
 
 class Indicator:
     """One per incoming chat message. Feed it events from any thread;
-    the Talk API calls are applied in order by the indicator thread."""
+    the Talk API call is applied in order by the indicator thread."""
 
     def __init__(self, room, message_id):
         self._room = room
@@ -40,17 +38,13 @@ class Indicator:
 
     # -- events (safe from any thread) ---------------------------------
 
-    def received(self):
-        """The webhook accepted the user's message."""
-        self._post(EMOJI_RECEIVED)
-
     def started(self):
         """pi (re)started for this job — also used before a retry."""
         self._post(EMOJI_STARTED)
 
     def stop(self):
         """Shut the thread down. Idempotent. The reaction is KEPT —
-        removing it would send another notification into the room."""
+        removing it would send a notification into the room."""
         self._q.put(None)
         self._thread.join(timeout=5)
 
@@ -68,9 +62,9 @@ class Indicator:
             if emoji == last:
                 continue
             try:
-                # add-only: the previous reaction (if any) stays. Talk
-                # keeps one row per (actor, message, emoji), so no
-                # replacement, no removal, no extra notifications.
+                # add-only: Talk keeps one row per (actor, message,
+                # emoji), so no replacement, no removal, no extra
+                # notifications.
                 react(self._room, self._mid, emoji)
                 last = emoji
             except Exception as e:

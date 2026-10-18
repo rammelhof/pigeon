@@ -203,8 +203,6 @@ def webhook(bot):
     key = f"{bot}/{folder}"
     ind = (indicator.Indicator(room, parsed["message_id"])
            if parsed["message_id"] else None)
-    if ind:
-        ind.received()  # 👍 the bot reacted to the user's message
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,
@@ -267,8 +265,6 @@ def handle_voice_message(bot, folder, room, f, cwd, sender, message_id=""):
     key = f"{bot}/{folder}"
     ind = (indicator.Indicator(room, message_id)
            if message_id else None)
-    if ind:
-        ind.received()
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,

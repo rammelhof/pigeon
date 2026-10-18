@@ -42,11 +42,10 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   the room (`🤔` + `>`-quoted lines) right before the answer, posted
   **silent** with the bot API's `silent` flag (Talk 17.1+) — no chat
   notification, and no app password involved.
-* **Progress reaction**: as the job progresses the bot reacts to the
-  user's message — 👍 when the message is received, 🤖 when pi starts.
-  That's it: the reaction is then kept, never removed (any reaction
-  change would notify the room again), and it is deliberately not
-  touched while pi thinks. Event-driven, batched messages each get
+* **Progress reaction**: when pi starts, the bot reacts to the user's
+  message with 🤖 and then leaves it — no reaction on receive, none
+  while pi thinks, none when it finishes (any reaction change would
+  notify the room again). Event-driven, batched messages each get
   their own reaction. Needs only the bot API (no user credentials); if
   Talk rejects the call (older versions) the indicator quietly stops
   and the run is unaffected.

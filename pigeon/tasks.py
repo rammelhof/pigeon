@@ -105,9 +105,9 @@ def run_job(key, bot, job):
 
     # live progress indicator(s): one bot reaction per user message
     # (batched jobs react to every message of the burst), updated by
-    # events: received -> thumbs up (webhook), pi started -> robot.
-    # The reaction is kept after the run finishes — reactions are only
-    # ever added, never removed (any change would notify the room).
+    # events: pi started -> robot. The reaction is kept after the run
+    # finishes — reactions are only ever added, never removed (any
+    # change would notify the room).
     inds = _indicators(job)
 
     def ind(name, *args):
