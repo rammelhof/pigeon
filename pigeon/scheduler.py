@@ -5,8 +5,13 @@
      {"id": "at-news", "prompt": "...", "time": "09:00", "tz": "Europe/Vienna"},
      {"id": "check",   "prompt": "...", "every_minutes": 15},
      {"id": "standup", "prompt": "...", "every_minutes": 60,
+      "weekdays": [0, 1, 2, 3, 4],
       "window": {"start": "10:00", "end": "22:00", "tz": "Europe/Vienna"}}
   ]}
+
+weekdays limits an entry to certain days of the week (0 = Monday …
+6 = Sunday, e.g. [0, 1, 2, 3, 4] = Mon–Fri); candidates on other days
+are skipped.
 
 When an entry is due, pigeon sends its prompt to the room as a normal
 message (same pipeline as a chat message, same pi session).
@@ -32,8 +37,33 @@ def state():
 
 # ------------------------------------------------------- time math --------
 
+# optional weekday restriction: "weekdays": [0, 1, 2, 3, 4] (0 = Monday …
+# 6 = Sunday). Entries without it run every day; entries on excluded
+# days are skipped and the next run snaps to the next allowed day.
+
+def _allowed_weekdays(entry):
+    """Set of allowed weekday numbers (0 = Mon … 6 = Sun), or None = all."""
+    wds = entry.get("weekdays")
+    if not isinstance(wds, (list, tuple)):
+        return None
+    try:
+        wds = {int(w) for w in wds}
+    except (TypeError, ValueError):
+        return None
+    if not wds or any(w < 0 or w > 6 for w in wds):
+        return None
+    return wds
+
+
+def _weekday_ok(entry, dt):
+    """Is the (tz-aware) datetime on an allowed weekday for this entry?"""
+    allowed = _allowed_weekdays(entry)
+    return allowed is None or dt.weekday() in allowed
+
+
 def _next_daily(entry, now):
-    """Next occurrence of the entry's local time HH:MM in its IANA tz."""
+    """Next occurrence of the entry's local time HH:MM in its IANA tz
+    (skipping weekdays not in 'weekdays', if any)."""
     try:
         zone = ZoneInfo(entry.get("tz") or "UTC")
         hh, mm = (entry["time"] or "00:00").split(":")
@@ -41,6 +71,8 @@ def _next_daily(entry, now):
         cand = local.replace(hour=int(hh), minute=int(mm),
                              second=0, microsecond=0)
         if cand <= local:
+            cand += timedelta(days=1)
+        while not _weekday_ok(entry, cand):
             cand += timedelta(days=1)
         return cand.timestamp()
     except Exception as e:
@@ -140,7 +172,8 @@ def _anchor_minutes(entry):
 def _anchored_next(entry, now):
     """Next run strictly after now on the phase start_time + N*interval
     (wall clock in the entry's tz; the phase restarts at start_time each
-    day), skipping candidates outside the window (if any)."""
+    day), skipping candidates outside the window (if any) and on
+    excluded weekdays (if any)."""
     every = int(entry["every_minutes"])  # _sched_kind_ok checked by caller
     anchor = _anchor_minutes(entry)
     try:
@@ -167,27 +200,42 @@ def _anchored_next(entry, now):
             p.append(pos)
             k += 1
 
-    for d in (0, 1):
-        mid = mid0 if d == 0 else mid0 + timedelta(days=1)
+    for d in range(8):  # up to a week ahead (weekdays may skip several days)
+        mid = mid0 if d == 0 else mid0 + timedelta(days=d)
         for pos in positions():
             cand = mid + timedelta(minutes=pos)
             if cand <= now_dt:  # 'now' may have seconds -> strictly after
                 continue
-            if _in_window(entry, cand.timestamp()):
+            if _in_window(entry, cand.timestamp()) \
+                    and _weekday_ok(entry, cand):
                 return cand.timestamp()
     return now + every * 60
+
+
+def _snap_to_weekday(entry, ts):
+    """Advance ts (keeping the time) until it lands on an allowed weekday."""
+    allowed = _allowed_weekdays(entry)
+    if allowed is None:
+        return ts
+    try:
+        zone = ZoneInfo(_entry_tz(entry))
+    except Exception:
+        return ts
+    dt = datetime.fromtimestamp(ts, zone)
+    while dt.weekday() not in allowed:
+        dt += timedelta(days=1)
+    return dt.timestamp()
 
 
 def initial_next_run(entry, now):
     if (entry.get("time") or "").strip():
         return _next_daily(entry, now)
-    every = entry.get("every_minutes")
     if _sched_kind_ok(entry):
         if _anchor_minutes(entry) is not None:
             return _anchored_next(entry, now)
         if not _in_window(entry, now):
-            return _next_window_start(entry, now)
-        return now + every * 60
+            return _snap_to_weekday(entry, _next_window_start(entry, now))
+        return _snap_to_weekday(entry, now + entry["every_minutes"] * 60)
     return None
 
 
@@ -200,7 +248,7 @@ def advance_next_run(entry, now):
         nxt = now + entry["every_minutes"] * 60
         if not _in_window(entry, nxt):
             nxt = _next_window_start(entry, nxt)
-        return nxt
+        return _snap_to_weekday(entry, nxt)
     return None
 
 
@@ -244,14 +292,20 @@ def tick():
             if not due and not changed:
                 continue
             # advance due entries and persist BEFORE enqueueing (so a crash
-            # right after can never double-fire a schedule)
+            # right after can never double-fire a schedule); an entry that
+            # turned out to land on an excluded weekday (e.g. the config
+            # changed since next_run was written) is just advanced again
+            fire = []
             for entry in due:
                 entry["next_run"] = advance_next_run(entry, now)
+                if _weekday_ok(entry, datetime.fromtimestamp(
+                        now, ZoneInfo(_entry_tz(entry)))):
+                    fire.append(entry)
             tmp = path + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, path)
-            for entry in due:
+            for entry in fire:
                 token = room_token(cwd)
                 if not token:
                     log.warning("scheduler: %s/%s: entry %r due but no room "

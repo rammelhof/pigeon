@@ -131,3 +131,42 @@ def run():
     check("anchor+window: out-of-window steps skipped "
           "(12:20 -> next day 10:00)",
           (loc.day, loc.hour, loc.minute) == (14, 10, 0), str(loc))
+
+    # 16. scheduler weekdays: entries are limited to certain days of the
+    # week (0 = Mon … 6 = Sun); candidates on excluded days are skipped.
+    # (2026-10-13 is a Tuesday, -16 Friday, -17 Saturday, -19 Monday)
+    workdays = [0, 1, 2, 3, 4]
+    wd_daily = {"prompt": "x", "time": "09:00", "tz": "Europe/Vienna",
+                "weekdays": workdays}
+    nxt = advance_next_run(wd_daily, at(16, 9, 30))  # Friday, past 09:00
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: daily entry on Friday snaps to Monday 09:00",
+          (loc.day, loc.hour, loc.minute) == (19, 9, 0), str(loc))
+    nxt = advance_next_run(wd_daily, at(14, 8, 0))  # Wednesday, before
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: daily entry on an allowed day keeps the same day",
+          (loc.day, loc.hour, loc.minute) == (14, 9, 0), str(loc))
+    wd_int = {"prompt": "x", "every_minutes": 60, "weekdays": workdays,
+              "tz": "Europe/Vienna"}
+    nxt = advance_next_run(wd_int, at(16, 23, 0))  # Friday -> Sat 00:00
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: interval run past the weekend snaps to Monday",
+          (loc.day, loc.hour, loc.minute) == (19, 0, 0), str(loc))
+    nxt = initial_next_run(wd_int, at(18, 8, 0))  # Sunday
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: initial run on Sunday snaps to Monday",
+          (loc.day, loc.hour, loc.minute) == (19, 9, 0), str(loc))
+    wd_anch = {"prompt": "x", "every_minutes": 15, "start_time": "10:30",
+               "tz": "Europe/Vienna", "weekdays": workdays}
+    nxt = advance_next_run(wd_anch, at(16, 10, 30))  # Friday morning
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: anchor phase continues on an allowed day",
+          (loc.day, loc.hour, loc.minute) == (16, 10, 45), str(loc))
+    nxt = advance_next_run(wd_anch, at(16, 23, 59))  # Friday night
+    loc = datetime.fromtimestamp(nxt, VIE)
+    check("weekdays: anchor phase skips the weekend (Mon 10:30)",
+          (loc.day, loc.hour, loc.minute) == (19, 10, 30), str(loc))
+    bad_wd = {"prompt": "x", "every_minutes": 30, "weekdays": [9]}
+    nxt = advance_next_run(bad_wd, at(13, 3, 0))
+    check("weekdays: invalid values are ignored (runs every day)",
+          nxt == at(13, 3, 0) + 30 * 60, str(nxt))
