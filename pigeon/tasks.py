@@ -14,9 +14,9 @@ import threading
 import time
 
 from .config import (BOTS_DIR, HEARTBEAT_INTERVAL, MAX_RETRIES,
-                     MESSAGE_BATCH_WINDOW, PI_TIMEOUT, REACTION_EVERY,
+                     MESSAGE_BATCH_WINDOW, PI_TIMEOUT,
                      STATE_SCAN_EVERY, log)
-from .nextcloud import post_message, react, unreact
+from .nextcloud import post_message
 from .pi import run_pi_once
 from .room import clear_running, mark_running, state_read, state_update
 
@@ -31,42 +31,11 @@ _heartbeat_ticks = 0
 _task_counter = 0
 _active_jobs = set()   # job ids currently tracked in memory (queued/running)
 
-# live progress indicator: while pi runs, the bot keeps reacting to the
-# user's message and cycles through these emojis every REACTION_EVERY
-# seconds; the reaction is removed when the run finishes.
-REACTION_CYCLE = ("🤔", "✍️", "⏳", "🤖")
 
-
-def _reaction_loop(room, message_id, stop):
-    """Cycle the reaction emoji while pi runs; remove it on the way out.
-    Stops silently on the first API error (e.g. Talk without the bot
-    reaction endpoints) — the run itself is never affected."""
-    current = None
-    i = 0
-    while True:
-        emoji = REACTION_CYCLE[i % len(REACTION_CYCLE)]
-        if emoji != current:
-            try:
-                if current is not None:
-                    unreact(room, message_id, current)
-                react(room, message_id, emoji)
-                current = emoji
-            except Exception as e:
-                log.debug("reaction indicator stopped: %s", e)
-                if current is not None:
-                    try:
-                        unreact(room, message_id, current)
-                    except Exception:
-                        pass
-                return
-        if stop.wait(REACTION_EVERY):
-            break
-        i += 1
-    if current is not None:
-        try:
-            unreact(room, message_id, current)
-        except Exception as e:
-            log.debug("could not remove reaction: %s", e)
+def _indicators(job):
+    """Progress indicators attached to this job (one per user message;
+    batched jobs carry the list of all of them)."""
+    return [i for i in (job.get("indicators") or []) if i is not None]
 
 
 def id_counter():
@@ -134,21 +103,28 @@ def run_job(key, bot, job):
         return "\n".join("> " + ln if ln else ">"
                          for ln in text[:4000].splitlines())
 
-    # live progress indicator (bot reaction on the user's message, cycling
-    # emoji) — only when the job came from a real chat message (has id)
-    react_stop = threading.Event()
-    react_thread = None
-    if job.get("message_id") and REACTION_EVERY > 0:
-        react_thread = threading.Thread(
-            target=_reaction_loop,
-            args=(job["room"], job["message_id"], react_stop),
-            daemon=True, name=f"react-{key}")
-        react_thread.start()
+    # live progress indicator(s): one bot reaction per user message
+    # (batched jobs react to every message of the burst), updated by
+    # events: received -> thumbs up (webhook), start -> robot, thinking
+    # blocks -> thinking face / thought balloon, finish -> cleared.
+    inds = _indicators(job)
+
+    def ind(name, *args):
+        for i in inds:
+            getattr(i, name)(*args)
+
+    def stop_indicators():
+        for i in inds:
+            i.stop()
 
     try:
         while True:
             try:
-                answer, thinking = run_pi_once(task)
+                ind("started")
+                answer, thinking = run_pi_once(
+                    task,
+                    on_thinking=(lambda phase: ind("thinking", phase)
+                                 if inds else None))
             except Exception as e:
                 task["error"] = str(e)
                 if task["retries"] >= MAX_RETRIES:
@@ -165,7 +141,9 @@ def run_job(key, bot, job):
             if not answer.strip():
                 raise RuntimeError("pi produced no answer")
 
-            # the thinking quote (when pi thought at all), then the answer
+            # clear the reaction first, then post the thinking quote (when
+            # pi thought at all) and the answer
+            stop_indicators()
             if thinking:
                 post_message(job["room"], f"\U0001f914 {quoted(thinking)}",
                              silent=True)
@@ -182,9 +160,7 @@ def run_job(key, bot, job):
         except Exception as post_err:
             log.error("could not post failure notice: %s", post_err)
     finally:
-        if react_thread is not None:
-            react_stop.set()
-            react_thread.join(timeout=5)
+        stop_indicators()
         clear_running(job["cwd"], task["id"])
         with _lock:
             for jid in task.get("job_ids", [task["job_id"]]):
@@ -226,6 +202,10 @@ def _room_worker(key, bot, q):
                 for e in batch)
             log.info("%s: %d messages within %.0fs window — one pi run",
                      key, len(batch), MESSAGE_BATCH_WINDOW)
+        job["indicators"] = [e["indicator"] for e in batch
+                             if e.get("indicator") is not None]
+        job["indicators"] = [e["indicator"] for e in batch
+                             if e.get("indicator") is not None]
         try:
             for e in batch:
                 jid = e["job_id"]

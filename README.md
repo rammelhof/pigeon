@@ -42,10 +42,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   the room (`🤔` + `>`-quoted lines) right before the answer, posted
   **silent** with the bot API's `silent` flag (Talk 17.1+) — no chat
   notification, and no app password involved.
-* **Progress reaction**: while pi runs, the bot reacts to the user's
-  message and cycles the emoji (`🤔 ✍️ ⏳ 🤖`) every
-  `REACTION_EVERY` seconds (default 10, 0 disables); the reaction is
-  removed when the run finishes. Needs only the bot API (no user
+* **Progress reaction**: as the job progresses the bot reacts to the
+  user's message — 👍 when the message is received, 🤖 when pi starts,
+  🤔 / 💭 (one per thinking block edge) while pi thinks — and the
+  reaction is removed when the result is posted. Event-driven, batched
+  messages each get their own reaction. Needs only the bot API (no user
   credentials); if Talk rejects the call (older versions) the indicator
   quietly stops and the run is unaffected.
 * **File attachments** (per-room, isolated): Talk sends files as a

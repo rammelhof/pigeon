@@ -47,7 +47,6 @@ os.environ.update({
     "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
     "MESSAGE_BATCH_WINDOW": "1",
-    "REACTION_EVERY": "0.2",
     "SANDBOX": "1",
     "LOG_LEVEL": "INFO",
     "PORT": "8088",

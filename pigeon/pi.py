@@ -140,11 +140,13 @@ def extract_answer_and_thinking(task):
     return answer, thinking
 
 
-def run_pi_once(task):
+def run_pi_once(task, on_thinking=None):
     """Start one pi run, consume the JSONL stream, return (answer, thinking).
     Thinking blocks are collected into task['_thinking'] from the event
     stream (pi streams thinking via message_update thinking_delta/end
-    events) and from the authoritative message_end content blocks."""
+    events) and from the authoritative message_end content blocks.
+    on_thinking(phase) is called for each thinking block edge
+    (phase = 'start' | 'end') so a progress indicator can spin along."""
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
                      task["bot"], task["room_id"])
     log.debug("task %s: running %s", task["id"], " ".join(cmd[:-1]))
@@ -180,6 +182,8 @@ def run_pi_once(task):
             if t == "thinking_start":
                 task["_thinking_idx"] = ev.get("contentIndex")
                 task["_thinking_buf"] = ""
+                if on_thinking:
+                    on_thinking("start")
             elif (t == "thinking_delta"
                   and ev.get("contentIndex") == task.get("_thinking_idx")):
                 task["_thinking_buf"] = task.get("_thinking_buf", "") \
@@ -189,6 +193,8 @@ def run_pi_once(task):
                 task["_thinking_idx"] = None
                 note_thinking(
                     ev.get("content") or task.get("_thinking_buf", ""))
+                if on_thinking:
+                    on_thinking("end")
         elif etype == "message_end":
             msg = event.get("message", {})
             if msg.get("role") == "assistant":

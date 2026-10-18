@@ -15,7 +15,7 @@ import time
 
 from flask import Flask, jsonify, request
 
-from . import nc_proxy, scheduler, skills, stt, tasks
+from . import indicator, nc_proxy, scheduler, skills, stt, tasks
 from .config import (BOTS_DIR, COMMIT, HEARTBEAT_INTERVAL, PI_CONFIG_DIR,
                      TALK_BOT_SECRET, VERSION, log)
 from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
@@ -201,11 +201,15 @@ def webhook(bot):
                                         "[file: no file data in payload]"))
 
     key = f"{bot}/{folder}"
+    ind = (indicator.Indicator(room, parsed["message_id"])
+           if parsed["message_id"] else None)
+    if ind:
+        ind.received()  # 👍 the bot reacted to the user's message
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,
         "message": message,
-        "message_id": parsed["message_id"],
+        "indicator": ind,
         "sender": sender,
         "cwd": cwd,
         "workspace": os.path.join(cwd, "workspace"),
@@ -261,11 +265,15 @@ def handle_voice_message(bot, folder, room, f, cwd, sender, message_id=""):
 
     post_message(room, "\U0001f442 " + text)
     key = f"{bot}/{folder}"
+    ind = (indicator.Indicator(room, message_id)
+           if message_id else None)
+    if ind:
+        ind.received()
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,
         "message": text,
-        "message_id": message_id,
+        "indicator": ind,
         "sender": sender,
         "cwd": cwd,
         "workspace": os.path.join(cwd, "workspace"),
