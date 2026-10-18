@@ -37,6 +37,10 @@ class H(BaseHTTPRequestHandler):
     stt_text = "hallo, das ist eine test-sprachnachricht"
     # bot API posts recorded with their silent flag: (room_token, silent)
     bot_silent = []
+    # bot API reactions recorded: (room_token, message_id, emoji, add|remove)
+    bot_reactions = []
+    # when non-zero, reaction endpoints return this code (simulate older Talk)
+    reaction_error = 0
 
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -290,7 +294,41 @@ class H(BaseHTTPRequestHandler):
         else:
             self._json({"ok": True}, code=204)
 
+    def _reaction(self, action, body):
+        """Bot reaction endpoint. Signature is over random+emoji."""
+        m = re.search(
+            r"/ocs/v2\.php/apps/spreed/api/v1/bot/([a-z0-9]{4,30})"
+            r"/reaction/([0-9]+)$", self.path)
+        if not m:
+            return False
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        emoji = (q.get("reaction") or [""])[0]
+        if body:
+            try:
+                emoji = json.loads(body).get("reaction", "") or emoji
+            except json.JSONDecodeError:
+                pass
+        if H.reaction_error:
+            self._json({"error": "not found"}, code=H.reaction_error)
+            return True
+        if getattr(H, "secret", None):
+            random_str = self.headers.get("X-Nextcloud-Talk-Bot-Random", "")
+            signature = self.headers.get(
+                "X-Nextcloud-Talk-Bot-Signature", "")
+            expected = emoji and hmac.new(
+                H.secret.encode(), (random_str + emoji).encode(),
+                hashlib.sha256).hexdigest() == signature
+            if not expected:
+                print("STUB bot-api  BAD REACTION SIGNATURE", flush=True)
+                self._json({"error": "unauthenticated"}, code=401)
+                return True
+        H.bot_reactions.append((m.group(1), m.group(2), emoji, action))
+        self._json({"ok": True}, code=201 if action == "add" else 200)
+        return True
+
     def do_DELETE(self):
+        if self._reaction("remove", self._body()):
+            return
         if not self._dav_ok():
             self._json({"error": "unauthorized"}, code=401)
             return
@@ -321,6 +359,8 @@ class H(BaseHTTPRequestHandler):
             self._json({"text": H.stt_text})
             return
         body = self._body()
+        if self._reaction("add", body):
+            return
         if "/ocs/v2.php/apps/spreed/api/v1/bot/" in self.path \
                 and self.path.endswith("/message"):
             if getattr(H, "secret", None):

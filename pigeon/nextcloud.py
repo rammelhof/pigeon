@@ -44,6 +44,29 @@ def post_message(room, message, silent=False):
         raise RuntimeError(f"post to chat failed: {r.status_code} {r.text[:200]}")
 
 
+def react(room, message_id, emoji):
+    """Add the bot's reaction to a chat message via the signed bot API.
+    The signature covers the emoji (not a message body)."""
+    url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
+           f"/bot/{room}/reaction/{message_id}")
+    headers = sign_request(TALK_BOT_SECRET, emoji)
+    r = requests.post(url, data=json.dumps({"reaction": emoji}).encode(),
+                      headers=headers, timeout=30)
+    if r.status_code >= 400:
+        raise RuntimeError(f"react failed: {r.status_code} {r.text[:200]}")
+
+
+def unreact(room, message_id, emoji):
+    """Remove the bot's reaction from a chat message (signed bot API)."""
+    url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
+           f"/bot/{room}/reaction/{message_id}")
+    headers = sign_request(TALK_BOT_SECRET, emoji)
+    r = requests.delete(url, data=json.dumps({"reaction": emoji}).encode(),
+                        headers=headers, timeout=30)
+    if r.status_code >= 400:
+        raise RuntimeError(f"unreact failed: {r.status_code} {r.text[:200]}")
+
+
 # ------------------------------------------------------------ files -------
 
 def fmt_size(n):

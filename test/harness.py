@@ -47,6 +47,7 @@ os.environ.update({
     "STATE_SCAN_EVERY": "1",
     "MAX_RETRIES": "1",
     "MESSAGE_BATCH_WINDOW": "1",
+    "REACTION_EVERY": "0.2",
     "SANDBOX": "1",
     "LOG_LEVEL": "INFO",
     "PORT": "8088",
@@ -147,13 +148,20 @@ class FakePopen:
                         timeout=5).read()
                 except Exception:
                     pass
-            self.stdout = iter(GOOD)
+            self.stdout = self._paced()
             self.stderr = io.StringIO("")
 
     def _hang(self):
         yield GOOD[0]
         while not self.killed:
             time.sleep(0.1)
+
+    def _paced(self):
+        """Yield the GOOD stream with a little pacing, so a live pi run
+        takes ~0.5s (enough for the reaction-indicator tick in the tests)."""
+        for line in GOOD:
+            yield line
+            time.sleep(0.05)
 
     def wait(self):
         self._finished = True

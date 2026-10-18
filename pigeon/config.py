@@ -30,6 +30,7 @@ MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "1"))
 # whole burst to pi in a single run (0 = off, immediate). Scheduled
 # prompts are never delayed/batched.
 MESSAGE_BATCH_WINDOW = float(os.environ.get("MESSAGE_BATCH_WINDOW", "5"))
+REACTION_EVERY = float(os.environ.get("REACTION_EVERY", "10"))  # seconds between reaction-emoji changes (0 disables)
 # Run every pi invocation in a bubblewrap sandbox: read-only root, only
 # the room's workspace/ and PI_CODING_AGENT_DIR writable, fresh PID/IPC/
 # UTS namespaces, full network access (0 = off). There is NO fallback:
