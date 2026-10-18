@@ -18,7 +18,8 @@ from .config import (BOTS_DIR, HEARTBEAT_INTERVAL, MAX_RETRIES,
                      STATE_SCAN_EVERY, log)
 from .nextcloud import post_message
 from .pi import run_pi_once
-from .room import clear_running, mark_running, state_read, state_update
+from .room import (clear_running, mark_running, quoted, save_thinking,
+                   state_read, state_update)
 
 _lock = threading.Lock()
 _tasks = {}          # task id -> task dict
@@ -99,10 +100,6 @@ def run_job(key, bot, job):
 
     # pi's thinking is quoted back into the room (silent: no chat
     # notification) right before the answer, via the signed bot API.
-    def quoted(text):
-        return "\n".join("> " + ln if ln else ">"
-                         for ln in text[:4000].splitlines())
-
     # live progress indicator(s): one bot reaction per user message
     # (batched jobs react to every message of the burst), updated by
     # events: pi started -> robot. The reaction is kept after the run
@@ -143,6 +140,7 @@ def run_job(key, bot, job):
             # (when pi thought at all) and the answer; the reaction stays
             stop_indicators()
             if thinking:
+                save_thinking(job["cwd"], thinking)  # for /thinking
                 post_message(job["room"], f"\U0001f914 {quoted(thinking)}",
                              silent=True)
             post_message(job["room"], answer)

@@ -23,7 +23,8 @@ from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, clean_session_and_workspace, folder_for_room,
                    handle_bot_added, handle_bot_removed, handle_pw_command,
-                   room_creds, room_dir, write_room_token)
+                   handle_thinking_command, room_creds, room_dir,
+                   write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -177,11 +178,18 @@ def webhook(bot):
         post_message(room, reply)
         return jsonify({"handled": "/pw"}), 200
 
-    # room command: /clean -> drop the pi sessions AND wipe the workspace,
-    # so the next message starts a fresh pi session with no files behind
-    if message == "/clean":
+    # room command: /clean (+ /c) -> drop the pi sessions AND wipe the
+    # workspace, so the next message starts a fresh pi session with no
+    # files behind
+    if message in ("/clean", "/c"):
         post_message(room, clean_session_and_workspace(cwd))
         return jsonify({"handled": "/clean"}), 200
+
+    # room command: /thinking (+ /t) -> post pi's last saved thinking
+    reply = handle_thinking_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "/thinking"}), 200
 
     configured, config_file = pi_config_status()
     if not configured:

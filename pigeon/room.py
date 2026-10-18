@@ -173,6 +173,8 @@ def clean_session_and_workspace(cwd):
     removed = wipe_sessions(ws)
     if os.path.isdir(ws):
         shutil.rmtree(ws, ignore_errors=True)
+    if os.path.isfile(os.path.join(cwd, THINKING_FILE)):
+        os.remove(os.path.join(cwd, THINKING_FILE))  # "reset my memory"
     cleared = bool(removed) or had_ws
     if cleared:
         extra = ", wiped the workspace" if had_ws else ""
@@ -181,6 +183,51 @@ def clean_session_and_workspace(cwd):
                 "session.")
     return ("no pi session in this room and the workspace is empty \u2014 "
             "nothing to clear.")
+
+
+# ---------------------------------------------------------- /thinking cmd --
+# pi's last thinking is saved to the room folder by the worker after
+# every run (tasks.py); /thinking (+ /t) posts it back to the room.
+
+THINKING_FILE = "last-thinking.md"
+THINKING_CMD_RE = re.compile(r"^/(thinking|t)$")
+
+
+def save_thinking(cwd, text):
+    """Atomically save pi's thinking for this room (full text)."""
+    path = os.path.join(cwd, THINKING_FILE)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def load_thinking(cwd):
+    """The last saved thinking for this room, or '' when there is none."""
+    try:
+        with open(os.path.join(cwd, THINKING_FILE), encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def quoted(text):
+    """Block-quote for posting pi's thinking into the room."""
+    return "\n".join("> " + ln if ln else ">"
+                     for ln in text[:4000].splitlines())
+
+
+def handle_thinking_command(message, cwd):
+    """Handle /thinking (or /t) for this room. Returns the reply to post,
+    or None when the message is not a /thinking command."""
+    if not THINKING_CMD_RE.match(message):
+        return None
+    thinking = load_thinking(cwd)
+    if not thinking:
+        return ("No thinking saved in this room yet \u2014 it appears "
+                "after the first pi run.")
+    return "\U0001f914 " + quoted(thinking)
 
 
 # ------------------------------------------------------- bot lifecycle ----
@@ -192,7 +239,8 @@ def clean_session_and_workspace(cwd):
 GREETING_FMT = (
     "Hi {room}, I'm {bot} \u2014 I run the pi coding agent in this room. "
     "Send /pw <nextcloud-user> <app-password> to enable Nextcloud file "
-    "access, or /clean to reset my memory."
+    "access. Use /thinking (or /t) to see my last reasoning and /clean "
+    "(or /c) to reset my memory."
 )
 
 

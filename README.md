@@ -116,10 +116,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   periodically by the state scan — pigeon re-queues them, so no message
   is lost in a restart or crash; and since every room always runs in its
   stable pi session, context survives too.
-* **Fresh context on demand**: send `/clean` in a room to wipe its pi
-  session files *and* its workspace folder (intercepted by pigeon, like
-  `/pw`) — the next message then starts a clean pi session with no old
-  history or files.
+* **Fresh context on demand**: send `/clean` (or `/c`) in a room to wipe
+  its pi session files *and* its workspace folder — including the saved
+  thinking (intercepted by pigeon, like `/pw`) — the next message then
+  starts a clean pi session with no old history or files.
+* **Last reasoning on demand**: after every run pigeon saves pi's
+  thinking to `<room dir>/last-thinking.md`; send `/thinking` (or `/t`)
+  to post it back into the room as a quote.
 * **Bot join & leave**: when the bot is added to a room, pigeon posts a
   one-time greeting; when it is removed (Talk sends a `Leave` webhook),
   pigeon wipes the room entirely — pi sessions, workspace, app password
@@ -286,7 +289,8 @@ webhook message (pigeon stores the room's conversation token in
 pigeon/
   config.py       environment variables + logging
   security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
-  room.py         room folders, .room.json (token + app password), /pw
+  room.py         room folders, .room.json (token + app password),
+                  /pw, /clean, /thinking (last-thinking.md), join/leave
   nextcloud.py    bot API posting, WebDAV file download, CalDAV helpers
   pi.py           pi config check, bubblewrap sandbox, JSONL run
   tasks.py        per-room queues + workers, retries, heartbeat

@@ -1,12 +1,13 @@
-"""Sections 4b + 4b2 + 4b3: /pw (per-room app password), /clean (session +
-workspace wipe), and the bot Join/Leave webhooks (greet / total wipe)."""
+"""Sections 4b + 4b2 + 4b3 + 4b4: /pw (per-room app password), /clean
+(+ /c, session + workspace wipe), /thinking (+ /t, post pi's last
+saved thinking), and the bot Join/Leave webhooks (greet / total wipe)."""
 import json
 import os
 
 import nc_stub
 from pigeon.pi import session_dir
 from harness import (BOTS_TEST, check, join_leave_payload, new_payload,
-                     signed_webhook)
+                     signed_webhook, wait_room_done)
 
 
 def run():
@@ -80,6 +81,11 @@ def run():
           body.get("handled") == "/clean" and any("nothing to clear" in m
                                                   for m in posted),
           str(posted)[:200])
+    s, body = signed_webhook("bot1", new_payload("/c",
+                                                 room_token="cleanrm0001",
+                                                 room_name="Clean Room"))
+    check("/c alias: handled like /clean",
+          body.get("handled") == "/clean", str(body))
 
     # 4b3. bot join/leave webhooks: one-time greeting + total clean on leave
     greet_room_dir = os.path.join(BOTS_TEST, "bot1", "rooms", "greet-room")
@@ -90,7 +96,8 @@ def run():
     posted = [m for r, m in nc_stub.H.received if r == "greetrm0001"]
     check("Join: greeting posted",
           len(posted) == 1 and "I'm bot1" in posted[0]
-          and "Greet Room" in posted[0],
+          and "Greet Room" in posted[0]
+          and "/thinking" in posted[0] and "/clean" in posted[0],
           str(posted)[:200])
     with open(os.path.join(greet_room_dir, ".room.json")) as f:
         meta = json.load(f)
@@ -140,3 +147,55 @@ def run():
                                                 join=False))
     check("Leave on unknown room: ok, no crash",
           s == 200 and body.get("handled") == "wiped", str(body))
+
+    # 4b4. /thinking (+ /t): pi's last thinking is saved to the room
+    # folder and posted back to the chat
+    think_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "think-room")
+    s, body = signed_webhook("bot1", new_payload("think out loud",
+                                                 room_token="thinkrm0001",
+                                                 room_name="Think Room"))
+    check("/thinking setup: queued (202)", s == 202, str(s))
+    t = wait_room_done("bot1/rooms/think-room")
+    check("/thinking setup: task done", bool(t) and t["status"] == "done",
+          str(t))
+    thinking_file = os.path.join(think_cwd, "last-thinking.md")
+    check("thinking saved to the room folder",
+          os.path.isfile(thinking_file)
+          and "step one" in open(thinking_file).read(), "missing")
+    rec_before = len(nc_stub.H.received)
+    s, body = signed_webhook("bot1", new_payload("/thinking",
+                                                 room_token="thinkrm0001",
+                                                 room_name="Think Room"))
+    check("/thinking: handled, not queued",
+          s == 200 and body.get("handled") == "/thinking", str(body))
+    posted = [m for r, m in nc_stub.H.received[rec_before:]
+              if r == "thinkrm0001"]
+    check("/thinking: last thinking posted as a quote",
+          any("\U0001f914" in m and "> step one" in m for m in posted),
+          str(posted)[:200])
+    rec_before = len(nc_stub.H.received)
+    s, body = signed_webhook("bot1", new_payload("/t",
+                                                 room_token="thinkrm0001",
+                                                 room_name="Think Room"))
+    check("/t alias: handled like /thinking",
+          s == 200 and body.get("handled") == "/thinking", str(body))
+    posted = [m for r, m in nc_stub.H.received[rec_before:]
+              if r == "thinkrm0001"]
+    check("/t alias: same reply",
+          any("> step one" in m for m in posted), str(posted)[:200])
+    rec_before = len(nc_stub.H.received)
+    s, body = signed_webhook("bot1", new_payload("/t",
+                                                 room_token="emptyrm001",
+                                                 room_name="Empty Room"))
+    posted = [m for r, m in nc_stub.H.received[rec_before:]
+              if r == "emptyrm001"]
+    check("/thinking on a fresh room: nothing saved yet",
+          s == 200 and body.get("handled") == "/thinking"
+          and any("No thinking saved" in m for m in posted),
+          str(posted)[:200])
+    s, body = signed_webhook("bot1", new_payload("/clean",
+                                                 room_token="thinkrm0001",
+                                                 room_name="Think Room"))
+    check("/clean drops the saved thinking too",
+          body.get("handled") == "/clean"
+          and not os.path.isfile(thinking_file), str(body))
