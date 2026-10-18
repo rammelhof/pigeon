@@ -8,7 +8,7 @@ A dead-simple webhook server that connects [Nextcloud Talk](https://nextcloud-ta
 ```
 Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> pi (one folder per bot + room)
         ^                                                          │
-        └──── posts thinking + answer back to the chat <───────────┘
+        └──── posts the answer back to the chat <──────────────────┘
 ```
 
 ## How it works (KISS)
@@ -32,16 +32,18 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `SANDBOX=0` disables it).
 * pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
-  parsed; pi's **thinking** is quoted back into the room (silent, see
-  below) and the **answer** is posted back via the official Talk bot API
+  parsed; pi's **thinking** is saved to the room folder (for the
+  `/thinking` command, see below) and the **answer** is posted back via
+  the official Talk bot API
   (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
   `OCS-APIRequest: true`, signed with the same secret — see the
   [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
   All room messaging goes through this bot API only.
-* **Thinking quote**: when pi produced thinking, it is quoted back into
-  the room (`🤔` + `>`-quoted lines) right before the answer, posted
-  **silent** with the bot API's `silent` flag (Talk 17.1+) — no chat
-  notification, and no app password involved.
+* **Thinking, on request only**: when pi produced thinking, it is
+  saved to `<room dir>/last-thinking.md` — it is never posted to the
+  room on its own. Send `/thinking` (or `/t`) to get the last thinking
+  posted back as a `🤔` + `>`-quoted message; only the robot reaction
+  and the result reach the room otherwise.
 * **Progress reaction**: when pi starts, the bot reacts to the user's
   message with 🤖 and then leaves it — no reaction on receive, none
   while pi thinks, none when it finishes (any reaction change would

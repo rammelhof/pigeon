@@ -1,12 +1,15 @@
-"""Section 4d3: the thinking quote + the reaction progress indicator.
+"""Section 4d3: the progress reaction + where pi's thinking goes.
 Every room's messaging goes through the signed Talk bot API only: when
 pi starts, the bot reacts to the user's message with a robot emoji and
 then leaves it (never removed, so the run's end stays quiet); after
-the run, pi's thinking is quoted back with the bot API's silent flag,
-then the answer follows as a normal bot post.
+the run, only the answer is posted — pi's thinking is saved to the
+room folder for the /thinking command, never posted on its own.
 """
+import os
+
 import nc_stub
-from harness import check, new_payload, signed_webhook, wait_room_done
+from harness import (BOTS_TEST, check, new_payload, signed_webhook,
+                     wait_room_done)
 
 E_START = "\U0001f916"     # 🤖 pi started (kept afterwards)
 
@@ -22,18 +25,14 @@ def run():
     check("thinking task done", bool(t) and t["status"] == "done", str(t))
     posts = [m for room, m in nc_stub.H.received[rec_before:]
              if room == "bubrm0001"]
-    quote = next((m for m in posts if "\U0001f914" in m), None)
-    check("thinking quote posted via the bot API",
-          quote is not None and "> step one" in quote
-          and "> step two" in quote,
+    check("only the answer is posted (no thinking quote)",
+          len(posts) == 1 and "hello from fake pi" in posts[0],
           str(posts))
-    check("thinking quote is silent (bot API silent flag)",
-          any(tok == "bubrm0001" and sil
-              for tok, sil in nc_stub.H.bot_silent[rec_before:]),
-          str(nc_stub.H.bot_silent[rec_before:]))
-    check("answer posted after the thinking quote",
-          len(posts) == 2 and "hello from fake pi" in posts[-1],
-          str(posts))
+    think_file = os.path.join(
+        BOTS_TEST, "bot1", "rooms", "bubble-room", "last-thinking.md")
+    check("thinking saved to the room folder instead of being posted",
+          os.path.isfile(think_file)
+          and "step one" in open(think_file).read(), "missing")
 
     # live progress: exactly one reaction, on the user's message (id
     # 999 in the test payload), added when pi starts — nothing on
