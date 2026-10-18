@@ -140,11 +140,11 @@ def extract_answer_and_thinking(task):
     return answer, thinking
 
 
-def run_pi_once(task, on_thinking=None):
+def run_pi_once(task):
     """Start one pi run, consume the JSONL stream, return (answer, thinking).
-    on_thinking(cumulative_text) is called whenever a thinking block
-    completes (pi streams thinking via message_update thinking_delta/
-    thinking_end events), so callers can update a live chat bubble."""
+    Thinking blocks are collected into task['_thinking'] from the event
+    stream (pi streams thinking via message_update thinking_delta/end
+    events) and from the authoritative message_end content blocks."""
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
                      task["bot"], task["room_id"])
     log.debug("task %s: running %s", task["id"], " ".join(cmd[:-1]))
@@ -159,6 +159,11 @@ def run_pi_once(task, on_thinking=None):
     task["proc"] = proc
     task["started_at"] = time.time()
     streamed = task.setdefault("_thinking_streamed", set())
+
+    def note_thinking(content):
+        if content and content not in streamed:
+            streamed.add(content)
+            task["_thinking"].append(content)
 
     for line in proc.stdout:
         line = line.strip()
@@ -182,23 +187,16 @@ def run_pi_once(task, on_thinking=None):
             elif (t == "thinking_end"
                   and ev.get("contentIndex") == task.get("_thinking_idx")):
                 task["_thinking_idx"] = None
-                content = ev.get("content") or task.get("_thinking_buf", "")
-                if content and content not in streamed:
-                    streamed.add(content)
-                    task["_thinking"].append(content)
-                    if on_thinking:
-                        on_thinking("\n\n".join(task["_thinking"]).strip())
+                note_thinking(
+                    ev.get("content") or task.get("_thinking_buf", ""))
         elif etype == "message_end":
             msg = event.get("message", {})
             if msg.get("role") == "assistant":
                 task["_last_message_end"] = event
                 for block in msg.get("content") or []:
                     if (isinstance(block, dict)
-                            and block.get("type") == "thinking"
-                            and block.get("thinking")
-                            and block["thinking"] not in streamed):
-                        streamed.add(block["thinking"])
-                        task["_thinking"].append(block["thinking"])
+                            and block.get("type") == "thinking"):
+                        note_thinking(block.get("thinking"))
     proc.wait()
     stderr = (proc.stderr.read() or "").strip()
     if proc.returncode != 0:

@@ -35,15 +35,8 @@ class H(BaseHTTPRequestHandler):
     stt_calls = []
     stt_key = "Bearer TEST-KEY"
     stt_text = "hallo, das ist eine test-sprachnachricht"
-    # Talk chat web API (live thinking bubble): room-by-token lookup
-    # returns this numeric id; sends/edits are recorded
-    chat_room_id = 5757
-    chat_lookups = []   # (room_token, authed_user)
-    chat_sent = []      # (room_id, message, silent)
-    chat_edits = []     # (room_id, message_id, message)
-    bot_silent = []     # (room_token, silent) — bot API posts
-    _chat_next_id = 9000
-    _chat_counter_lock = None
+    # bot API posts recorded with their silent flag: (room_token, silent)
+    bot_silent = []
 
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -81,19 +74,6 @@ class H(BaseHTTPRequestHandler):
             return None
 
     def do_GET(self):
-        m = re.fullmatch(
-            r"/ocs/v2\.php/apps/spreed/api/v4/room/([^/?]+)", self.path)
-        if m:
-            auth = self._basic_auth()
-            ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
-            H.chat_lookups.append((m.group(1), auth[0] if auth else None))
-            if not ok:
-                self._json({"error": "unauthorized"}, code=401)
-                return
-            self._json({"ocs": {"meta": {"status": "ok"},
-                                "data": {"id": H.chat_room_id,
-                                         "token": m.group(1)}}})
-            return
         if self.path.startswith("/remote.php/webdav/"):
             auth = self._basic_auth()
             ok = auth is not None and H.share_auth.get(auth[0]) == auth[1]
@@ -282,18 +262,6 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_PUT(self):
-        m = re.fullmatch(
-            r"/ocs/v2\.php/apps/spreed/api/v4/chat/(\d+)/(\d+)", self.path)
-        if m:
-            if not self._dav_ok():
-                self._json({"error": "unauthorized"}, code=401)
-                return
-            text = urllib.parse.parse_qs(self._body()).get("message", [""])[0]
-            H.chat_edits.append((int(m.group(1)), int(m.group(2)), text))
-            self._json({"ocs": {"meta": {"status": "ok"},
-                                "data": {"id": int(m.group(2)),
-                                         "message": text}}})
-            return
         n = int(self.headers.get("Content-Length", 0))
         data = self.rfile.read(n)
         if not self._dav_ok():
@@ -337,21 +305,6 @@ class H(BaseHTTPRequestHandler):
         self._json({"ok": True}, code=204)
 
     def do_POST(self):
-        m = re.fullmatch(r"/ocs/v2\.php/apps/spreed/api/v4/chat/(\d+)",
-                         self.path)
-        if m:
-            if not self._dav_ok():
-                self._json({"error": "unauthorized"}, code=401)
-                return
-            qs = urllib.parse.parse_qs(self._body())
-            text = qs.get("message", [""])[0]
-            silent = qs.get("silent", ["0"])[0] == "1"
-            H._chat_next_id += 1
-            H.chat_sent.append((int(m.group(1)), text, silent))
-            self._json({"ocs": {"meta": {"status": "ok"},
-                                "data": {"id": H._chat_next_id,
-                                         "message": text}}})
-            return
         if self.path.rstrip("/") == "/v1/audio/transcriptions":
             n = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(n)  # binary multipart — keep as bytes

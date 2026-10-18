@@ -32,22 +32,16 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   `SANDBOX=0` disables it).
 * pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
-  parsed; the assistant's **thinking** is streamed into the conversation
-  live — see **thinking bubble** below — and the **answer** is posted back
-  via the official Talk bot API
+  parsed; pi's **thinking** is quoted back into the room (silent, see
+  below) and the **answer** is posted back via the official Talk bot API
   (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
   `OCS-APIRequest: true`, signed with the same secret — see the
   [Talk bots docs](https://nextcloud-talk.readthedocs.io/en/latest/bots/)).
-* **Thinking bubble**: while pi thinks, its reasoning is posted as a single
-  `🤔 *thinking…*` message and **edited in place** as new thinking arrives
-  (throttled to ~3 s between edits). The Talk bot API can only *post*, never
-  *edit*, so the bubble is sent as the room's app-password user via the
-  regular chat web API (`…/api/v4/room/<token>` → id, `…/api/v4/chat/<id>`);
-  the final answer still goes out as the bot. Thinking is always posted
-  **silent** (no notification in Talk): the bubble via the chat API's
-  `silent=1`, and the fallback `🤔`-quoted thinking message — for rooms
-  without an app password — via the bot API's own `silent` flag
-  (Talk 17.1+).
+  All room messaging goes through this bot API only.
+* **Thinking quote**: when pi produced thinking, it is quoted back into
+  the room (`🤔` + `>`-quoted lines) right before the answer, posted
+  **silent** with the bot API's `silent` flag (Talk 17.1+) — no chat
+  notification, and no app password involved.
 * **File attachments** (per-room, isolated): Talk sends files as a
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's

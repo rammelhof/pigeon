@@ -15,10 +15,9 @@ import time
 
 from .config import (BOTS_DIR, HEARTBEAT_INTERVAL, MAX_RETRIES,
                      MESSAGE_BATCH_WINDOW, PI_TIMEOUT, STATE_SCAN_EVERY, log)
-from .nextcloud import (chat_edit, chat_room_id, chat_send, post_message)
+from .nextcloud import post_message
 from .pi import run_pi_once
-from .room import (clear_running, mark_running, room_creds, state_read,
-                   state_update)
+from .room import clear_running, mark_running, state_read, state_update
 
 _lock = threading.Lock()
 _tasks = {}          # task id -> task dict
@@ -91,49 +90,16 @@ def run_job(key, bot, job):
     os.makedirs(job["workspace"], exist_ok=True)
     mark_running(job["cwd"], task)
 
-    # Live thinking bubble: the bot API cannot edit messages, so the
-    # bubble is posted as the room's app-password user (chat web API)
-    # and edited in place while pi thinks. Rooms without a password
-    # (or where posting fails) fall back to the classic end-of-run
-    # thinking quote via the bot API.
-    bubble = None
-    creds = room_creds(job["cwd"])
-    if creds:
-        try:
-            rid = chat_room_id(creds, job["room"])
-            mid = chat_send(creds, rid, "\U0001f914 *thinking…*",
-                            silent=True)
-            bubble = {"creds": creds, "room_id": rid, "message_id": mid}
-        except Exception as e:
-            log.warning("task %s: no thinking bubble: %s", task["id"], e)
-    bubble_state = {"last": 0.0}
-
+    # pi's thinking is quoted back into the room (silent: no chat
+    # notification) right before the answer, via the signed bot API.
     def quoted(text):
         return "\n".join("> " + ln if ln else ">"
                          for ln in text[:4000].splitlines())
 
-    def bubble_update(text, force=False):
-        """Edit the thinking bubble in place (throttled to ~3s)."""
-        if bubble is None or not (text or "").strip():
-            return
-        now = time.time()
-        if not force and now - bubble_state["last"] < 3:
-            return
-        bubble_state["last"] = now
-        try:
-            chat_edit(bubble["creds"], bubble["room_id"],
-                      bubble["message_id"],
-                      "\U0001f914 " + quoted(text.strip()))
-        except Exception as e:
-            log.warning("task %s: bubble update failed: %s", task["id"], e)
-
-    def on_thinking(text):
-        bubble_update(text)
-
     try:
         while True:
             try:
-                answer, thinking = run_pi_once(task, on_thinking)
+                answer, thinking = run_pi_once(task)
             except Exception as e:
                 task["error"] = str(e)
                 if task["retries"] >= MAX_RETRIES:
@@ -150,14 +116,10 @@ def run_job(key, bot, job):
             if not answer.strip():
                 raise RuntimeError("pi produced no answer")
 
-            # final state of the thinking bubble (or classic quote post
-            # when there is no bubble), then the answer
+            # the thinking quote (when pi thought at all), then the answer
             if thinking:
-                if bubble is not None:
-                    bubble_update(thinking, force=True)
-                else:
-                    post_message(job["room"], f"\U0001f914 {quoted(thinking)}",
-                                 silent=True)
+                post_message(job["room"], f"\U0001f914 {quoted(thinking)}",
+                             silent=True)
             post_message(job["room"], answer)
             task["status"] = "done"
             break
@@ -166,9 +128,6 @@ def run_job(key, bot, job):
         task["status"] = "failed"
         task["error"] = str(e)
         try:
-            if bubble is not None:
-                bubble_update("\n\n".join(task["_thinking"]).strip()
-                              or "\u26a0\ufe0f pi run failed", force=True)
             post_message(job["room"],
                          f"\u26a0\ufe0f pi run failed: {e}"[:2000])
         except Exception as post_err:
