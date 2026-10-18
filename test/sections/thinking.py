@@ -1,18 +1,16 @@
 """Section 4d3: the thinking quote + the reaction progress indicator.
 Every room's messaging goes through the signed Talk bot API only: as the
 job progresses, the bot reacts to the user's message — 👍 when the
-message is received, 🤖 when pi starts, 🤔/💭 (one per thinking block
-edge) while pi thinks — and clears the reaction before posting; after
-the run, pi's thinking is quoted back with the bot API's silent flag,
-then the answer follows as a normal bot post.
+message is received, 🤖 when pi starts — and the reaction is then kept
+(never removed, so the run's end stays quiet); after the run, pi's
+thinking is quoted back with the bot API's silent flag, then the answer
+follows as a normal bot post.
 """
 import nc_stub
 from harness import check, new_payload, signed_webhook, wait_room_done
 
 E_RECV = "\U0001f44d"      # 👍 message received
-E_START = "\U0001f916"     # 🤖 pi started
-E_THINK_A = "\U0001f914"   # 🤔 thinking block started
-E_THINK_B = "\U0001f4ad"   # 💭 thinking block finished
+E_START = "\U0001f916"     # 🤖 pi started (kept afterwards)
 
 
 def run():
@@ -40,8 +38,9 @@ def run():
           str(posts))
 
     # live progress: the reaction on the user's message (id 999 in the
-    # test payload), updated by events, cleared before the answer goes
-    # out:  👍 received -> 🤖 started -> 🤔 -> 💭 -> remove
+    # test payload), updated by events:  👍 received -> 🤖 started, and
+    # then it stays — reactions are only ever added, never removed, so
+    # finishing the run causes no further notification
     reacts = [(mid, emoji, act)
               for room, mid, emoji, act
               in nc_stub.H.bot_reactions[rea_before:]
@@ -52,11 +51,9 @@ def run():
           str(reacts))
     check("robot reaction when pi started",
           len(adds) >= 2 and adds[1] == E_START, str(adds))
-    check("reaction spins thinking face / thought balloon while pi thinks",
-          E_THINK_A in adds and E_THINK_B in adds, str(adds))
-    check("reaction cleared before the answer is posted",
-          bool(reacts) and reacts[-1][2] == "remove"
-          and reacts[-1][1] == adds[-1], str(reacts))
+    check("no reaction changes while pi thinks or when it finishes",
+          len(reacts) == 2 and all(act == "add" for _, _, act in reacts),
+          str(reacts))
 
     # fail-soft: Talk without the reaction endpoints (404) must not break
     # the run — the indicator quietly dies, the answer is still posted

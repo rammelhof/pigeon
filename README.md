@@ -43,12 +43,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   **silent** with the bot API's `silent` flag (Talk 17.1+) — no chat
   notification, and no app password involved.
 * **Progress reaction**: as the job progresses the bot reacts to the
-  user's message — 👍 when the message is received, 🤖 when pi starts,
-  🤔 / 💭 (one per thinking block edge) while pi thinks — and the
-  reaction is removed when the result is posted. Event-driven, batched
-  messages each get their own reaction. Needs only the bot API (no user
-  credentials); if Talk rejects the call (older versions) the indicator
-  quietly stops and the run is unaffected.
+  user's message — 👍 when the message is received, 🤖 when pi starts.
+  That's it: the reaction is then kept, never removed (any reaction
+  change would notify the room again), and it is deliberately not
+  touched while pi thinks. Event-driven, batched messages each get
+  their own reaction. Needs only the bot API (no user credentials); if
+  Talk rejects the call (older versions) the indicator quietly stops
+  and the run is unaffected.
 * **File attachments** (per-room, isolated): Talk sends files as a
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's

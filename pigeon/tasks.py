@@ -105,8 +105,9 @@ def run_job(key, bot, job):
 
     # live progress indicator(s): one bot reaction per user message
     # (batched jobs react to every message of the burst), updated by
-    # events: received -> thumbs up (webhook), start -> robot, thinking
-    # blocks -> thinking face / thought balloon, finish -> cleared.
+    # events: received -> thumbs up (webhook), pi started -> robot.
+    # The reaction is kept after the run finishes — reactions are only
+    # ever added, never removed (any change would notify the room).
     inds = _indicators(job)
 
     def ind(name, *args):
@@ -121,10 +122,7 @@ def run_job(key, bot, job):
         while True:
             try:
                 ind("started")
-                answer, thinking = run_pi_once(
-                    task,
-                    on_thinking=(lambda phase: ind("thinking", phase)
-                                 if inds else None))
+                answer, thinking = run_pi_once(task)
             except Exception as e:
                 task["error"] = str(e)
                 if task["retries"] >= MAX_RETRIES:
@@ -141,8 +139,8 @@ def run_job(key, bot, job):
             if not answer.strip():
                 raise RuntimeError("pi produced no answer")
 
-            # clear the reaction first, then post the thinking quote (when
-            # pi thought at all) and the answer
+            # shut the indicator thread down, then post the thinking quote
+            # (when pi thought at all) and the answer; the reaction stays
             stop_indicators()
             if thinking:
                 post_message(job["room"], f"\U0001f914 {quoted(thinking)}",

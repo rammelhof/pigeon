@@ -1,13 +1,16 @@
-"""Live progress indicator: a bot reaction on the user's chat message
-that is updated as the job progresses — event-driven, not timer-driven:
+"""Live progress indicator: a bot reaction on the user's chat message,
+updated as the job progresses — event-driven, not timer-driven:
 
     webhook message received   -> thumbs up
-    pi agent started           -> robot
-    pi thinking (per block)    -> thinking face / thought balloon
-    run finished               -> reaction removed, result is posted
+    pi agent started           -> robot (and then it stays; reactions
+                                   are only ever set, never removed,
+                                   because removal would notify again)
 
-All Talk API calls happen in one small thread fed by a queue, so the
-worker and the pi stream never block on HTTP. Any API error (e.g. an
+Reactions are deliberately NOT changed while pi thinks — any reaction
+change reaches the room as a notification.
+
+The Talk API calls happen in one small thread fed by a queue, so the
+webhook and the worker never block on HTTP. Any API error (e.g. an
 older Talk without the bot reaction endpoints) disables the indicator
 for good — the run itself is never affected.
 """
@@ -16,12 +19,10 @@ import queue
 import threading
 
 from .config import log
-from .nextcloud import react, unreact
+from .nextcloud import react
 
 EMOJI_RECEIVED = "\U0001f44d"  # 👍 message received
 EMOJI_STARTED = "\U0001f916"   # 🤖 pi agent started
-EMOJI_THINK_START = "\U0001f914"  # 🤔 a thinking block started
-EMOJI_THINK_END = "\U0001f4ad"    # 💭 a thinking block finished
 
 
 class Indicator:
@@ -47,13 +48,9 @@ class Indicator:
         """pi (re)started for this job — also used before a retry."""
         self._post(EMOJI_STARTED)
 
-    def thinking(self, phase):
-        """pi streamed a thinking block edge: 'start' or 'end'."""
-        self._post(EMOJI_THINK_START if phase == "start"
-                   else EMOJI_THINK_END)
-
     def stop(self):
-        """Clear the reaction and shut the thread down. Idempotent."""
+        """Shut the thread down. Idempotent. The reaction is KEPT —
+        removing it would send another notification into the room."""
         self._q.put(None)
         self._thread.join(timeout=5)
 
@@ -63,24 +60,19 @@ class Indicator:
         self._q.put(emoji)
 
     def _run(self):
-        current = None
+        last = None
         while True:
             emoji = self._q.get()
             if emoji is None:
                 break
-            if emoji == current:
+            if emoji == last:
                 continue
             try:
-                if current is not None:
-                    unreact(self._room, self._mid, current)
+                # add-only: the previous reaction (if any) stays. Talk
+                # keeps one row per (actor, message, emoji), so no
+                # replacement, no removal, no extra notifications.
                 react(self._room, self._mid, emoji)
-                current = emoji
+                last = emoji
             except Exception as e:
                 log.debug("indicator %s stopped: %s", self._mid, e)
                 return
-        if current is not None:
-            try:
-                unreact(self._room, self._mid, current)
-            except Exception as e:
-                log.debug("indicator %s: could not remove %s",
-                          self._mid, current)
