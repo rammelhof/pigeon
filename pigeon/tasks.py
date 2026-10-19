@@ -34,9 +34,35 @@ _active_jobs = set()   # job ids currently tracked in memory (queued/running)
 
 
 def _indicators(job):
-    """Progress indicators attached to this job (one per user message;
-    batched jobs carry the list of all of them)."""
+    """Progress indicators attached to this job — normally at most one:
+    only the LAST message of a burst is reacted (one notification, not
+    one per message)."""
     return [i for i in (job.get("indicators") or []) if i is not None]
+
+
+def stop_running(cwd):
+    """Kill the running pi process of this room and make the worker end
+    quietly (no retry, no error message, the robot reaction is removed).
+    True when a run was stopped, False when nothing was running."""
+    running = state_read(cwd).get("running") or {}
+    task = _tasks.get(running.get("task_id"))
+    if task is None or task["status"] not in ("running", "retrying"):
+        return False
+    task["stopped"] = True
+    proc = task["proc"]
+    if proc is not None:
+        try:
+            if hasattr(os, "killpg"):  # Linux/Docker: kill whole group
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    log.info("task %s: stop requested for %s", task["id"], cwd)
+    return True
 
 
 def id_counter():
@@ -101,28 +127,29 @@ def run_job(key, bot, job):
     # pi's thinking is saved to the room folder for the /thinking
     # command — it is never posted to the room on its own; only the
     # robot reaction (start) and the answer (result) reach the chat.
-    # live progress indicator(s): one bot reaction per user message
-    # (batched jobs react to every message of the burst), updated by
-    # events: pi started -> robot. The reaction is kept after the run
+    # live progress indicator: one bot reaction on the (last) user
+    # message, set when pi starts. The reaction is kept after the run
     # finishes — reactions are only ever added, never removed (any
-    # change would notify the room).
+    # change would notify the room) — except on /stop.
     inds = _indicators(job)
 
     def ind(name, *args):
         for i in inds:
             getattr(i, name)(*args)
 
-    def stop_indicators():
-        for i in inds:
-            i.stop()
-
     try:
         while True:
+            if task.get("stopped"):
+                task["status"] = "stopped"
+                break  # /stop: end quietly (no post, no retry)
             try:
                 ind("started")
                 answer, thinking = run_pi_once(task)
             except Exception as e:
                 task["error"] = str(e)
+                if task.get("stopped"):
+                    task["status"] = "stopped"
+                    break  # /stop: end quietly (no post, no retry)
                 if task["retries"] >= MAX_RETRIES:
                     raise
                 task["retries"] += 1
@@ -139,23 +166,33 @@ def run_job(key, bot, job):
 
             # shut the indicator thread down (the reaction stays), save
             # the thinking for /thinking, then post the answer
-            stop_indicators()
+            for i in inds:
+                i.stop()
             if thinking:
                 save_thinking(job["cwd"], thinking)
             post_message(job["room"], answer)
             task["status"] = "done"
             break
     except Exception as e:
-        log.error("task %s failed permanently: %s", task["id"], e)
-        task["status"] = "failed"
-        task["error"] = str(e)
-        try:
-            post_message(job["room"],
-                         f"\u26a0\ufe0f pi run failed: {e}"[:2000])
-        except Exception as post_err:
-            log.error("could not post failure notice: %s", post_err)
+        if task.get("stopped"):
+            # /stop: the run was aborted by the user — not a failure,
+            # nothing is posted
+            task["status"] = "stopped"
+            log.info("task %s stopped by user", task["id"])
+        else:
+            log.error("task %s failed permanently: %s", task["id"], e)
+            task["status"] = "failed"
+            task["error"] = str(e)
+            try:
+                post_message(job["room"],
+                             f"\u26a0\ufe0f pi run failed: {e}"[:2000])
+            except Exception as post_err:
+                log.error("could not post failure notice: %s", post_err)
     finally:
-        stop_indicators()
+        for i in inds:
+            if task.get("stopped"):
+                i.clear()  # the user ended the run — drop the robot
+            i.stop()
         clear_running(job["cwd"], task["id"])
         with _lock:
             for jid in task.get("job_ids", [task["job_id"]]):
@@ -163,7 +200,7 @@ def run_job(key, bot, job):
         with _lock:
             if task["status"] == "done":
                 _stats["completed"] += 1
-            else:
+            elif task["status"] == "failed":
                 _stats["failed"] += 1
         log.info("task %s finished: %s", task["id"], task["status"])
 
@@ -197,10 +234,14 @@ def _room_worker(key, bot, q):
                 for e in batch)
             log.info("%s: %d messages within %.0fs window — one pi run",
                      key, len(batch), MESSAGE_BATCH_WINDOW)
-        job["indicators"] = [e["indicator"] for e in batch
-                             if e.get("indicator") is not None]
-        job["indicators"] = [e["indicator"] for e in batch
-                             if e.get("indicator") is not None]
+        # only the LAST message of the burst carries the reaction — one
+        # notification instead of one per message (the earlier ones never
+        # react, their threads just shut down)
+        inds = [e["indicator"] for e in batch
+                if e.get("indicator") is not None]
+        job["indicators"] = inds[-1:]
+        for i in inds[:-1]:
+            i.stop()
         try:
             for e in batch:
                 jid = e["job_id"]

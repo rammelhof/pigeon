@@ -21,10 +21,11 @@ from .config import (BOTS_DIR, COMMIT, HEARTBEAT_INTERVAL, PI_CONFIG_DIR,
 from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
                         post_message, save_download)
 from .pi import pi_config_status
-from .room import (BOT_NAME_RE, clean_session_and_workspace, folder_for_room,
-                   handle_bot_added, handle_bot_removed, handle_pw_command,
+from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
+                   folder_for_room, handle_bot_added, handle_bot_removed,
+                   handle_mention_command, handle_pw_command,
                    handle_thinking_command, room_creds, room_dir,
-                   write_room_token)
+                   room_meta_read, write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -190,6 +191,44 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "/thinking"}), 200
+
+    # room commands: /stop (or /s), /schedule list|rm, /mention, /help
+    # (or /h), /version — none of these ever reach pi
+    if message in ("/stop", "/s"):
+        stopped = tasks.stop_running(cwd)
+        post_message(room,
+                     "pi run stopped \u2014 the room is free again."
+                     if stopped else
+                     "Nothing is running in this room right now.")
+        return jsonify({"handled": "/stop"}), 200
+
+    reply = scheduler.handle_schedule_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "/schedule"}), 200
+
+    reply = handle_mention_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "/mention"}), 200
+
+    if message in ("/help", "/h"):
+        post_message(room, HELP_TEXT)
+        return jsonify({"handled": "/help"}), 200
+
+    if message == "/version":
+        post_message(room, f"pigeon {VERSION} ({COMMIT})")
+        return jsonify({"handled": "/version"}), 200
+
+    # mention mode: when on, only messages that @mention the bot reach
+    # pi (the mention is stripped first) — commands above always work
+    if room_meta_read(cwd).get("mention_only"):
+        m = re.match(r"^@\S+\s*(.*)$", message, re.S)
+        if not m:
+            return jsonify({"ignored": "no mention"}), 200
+        message = m.group(1).strip()
+        if not message:
+            return jsonify({"ignored": "empty message"}), 200
 
     configured, config_file = pi_config_status()
     if not configured:

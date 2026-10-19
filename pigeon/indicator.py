@@ -6,7 +6,8 @@ Event-driven, add-only:
 Nothing else: no reaction when the webhook receives the message,
 nothing while pi thinks, nothing when the run finishes. Reactions are
 only ever set, never removed — any reaction change reaches the room
-as a notification, so the indicator stays as quiet as possible.
+as a notification — with one exception: /stop removes the robot
+reaction, because the user explicitly ended the run.
 
 The Talk API call happens in one small thread fed by a queue, so the
 worker never blocks on HTTP. Any API error (e.g. an older Talk without
@@ -18,9 +19,10 @@ import queue
 import threading
 
 from .config import log
-from .nextcloud import react
+from .nextcloud import react, unreact
 
 EMOJI_STARTED = "\U0001f916"  # 🤖 pi agent started
+_CLEAR = object()  # queue command: remove the last reaction (only /stop)
 
 
 class Indicator:
@@ -48,6 +50,12 @@ class Indicator:
         self._q.put(None)
         self._thread.join(timeout=5)
 
+    def clear(self):
+        """Remove the last reaction — only used by /stop: the user
+        explicitly ended the run, so the robot reaction is misleading.
+        Without the API it simply fails silently."""
+        self._q.put(_CLEAR)
+
     # -- the thread ------------------------------------------------------
 
     def _post(self, emoji):
@@ -56,17 +64,25 @@ class Indicator:
     def _run(self):
         last = None
         while True:
-            emoji = self._q.get()
-            if emoji is None:
+            item = self._q.get()
+            if item is None:
                 break
-            if emoji == last:
+            if item is _CLEAR:
+                if last:
+                    try:
+                        unreact(self._room, self._mid, last)
+                    except Exception as e:
+                        log.debug("indicator %s unreact failed: %s",
+                                  self._mid, e)
+                continue
+            if item == last:
                 continue
             try:
                 # add-only: Talk keeps one row per (actor, message,
                 # emoji), so no replacement, no removal, no extra
                 # notifications.
-                react(self._room, self._mid, emoji)
-                last = emoji
+                react(self._room, self._mid, item)
+                last = item
             except Exception as e:
                 log.debug("indicator %s stopped: %s", self._mid, e)
                 return

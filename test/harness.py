@@ -152,8 +152,10 @@ class FakePopen:
 
     def _hang(self):
         yield GOOD[0]
-        while not self.killed:
+        while not self.killed and self.poll() is None:
             time.sleep(0.1)
+        # the pipe is closed once the process dies — the reader sees EOF
+        return
 
     def _paced(self):
         """Yield the GOOD stream with a little pacing, so a live pi run
@@ -172,6 +174,7 @@ class FakePopen:
     def kill(self):
         self.killed = True
         self.returncode = 137
+        self._finished = True  # a killed process is dead: poll() says so
 
 
 subprocess.Popen = FakePopen
@@ -298,7 +301,8 @@ def wait_room_done(cwd, timeout=25, min_count=1, retries=None):
         h = tasks()
         mine = [t for t in h["tasks"]
                 if t["room_cwd"].replace("\\", "/").endswith(cwd)]
-        if len(mine) >= min_count and mine[-1]["status"] in ("done", "failed") \
+        if len(mine) >= min_count and mine[-1]["status"] in (
+                "done", "failed", "stopped") \
                 and (retries is None or mine[-1]["retries"] == retries):
             return mine[-1]
         time.sleep(0.3)

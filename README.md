@@ -125,6 +125,16 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * **Last reasoning on demand**: after every run pigeon saves pi's
   thinking to `<room dir>/last-thinking.md`; send `/thinking` (or `/t`)
   to post it back into the room as a quote.
+* **More room commands** (all intercepted by pigeon, never reach pi):
+  `/stop` (or `/s`) kills the running pi in this room and ends quietly
+  — it also removes the robot reaction, the only reaction pigeon ever
+  removes; `/schedule list` / `/schedule rm <id>` show or drop scheduled
+  tasks; `/mention on|off|status` (aliases `/m …`) makes pigeon only
+  react to messages that @mention it (the mention is stripped); `/help`
+  (or `/h`) lists all commands and `/version` shows the running build.
+  When several messages arrive within the batch window they are merged
+  into one pi run and only the **last** message is reacted — one
+  notification per burst, not one per message.
 * **Bot join & leave**: when the bot is added to a room, pigeon posts a
   one-time greeting; when it is removed (Talk sends a `Leave` webhook),
   pigeon wipes the room entirely — pi sessions, workspace, app password

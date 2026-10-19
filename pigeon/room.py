@@ -230,6 +230,37 @@ def handle_thinking_command(message, cwd):
     return "\U0001f914 " + quoted(thinking)
 
 
+# --------------------------------------------------------- /mention cmd --
+# When on, a message is only handled if it @mentions the bot first (the
+# mention is stripped before pi sees it). Persisted in .room.json.
+
+MENTION_CMD_RE = re.compile(r"^/(mention|m)\s+(on|off|status)\s*$")
+
+
+def handle_mention_command(message, cwd):
+    """Handle /mention on|off|status (or /m …). Returns the reply to
+    post, or None when the message is not a /mention command."""
+    m = MENTION_CMD_RE.match(message or "")
+    if not m:
+        return None
+    mode = m.group(2)
+    meta = room_meta_read(cwd)
+    if mode == "status":
+        return ("@mentions are "
+                + ("required" if meta.get("mention_only") else "not "
+                   "required")
+                + " in this room. Use /mention on or /mention off to "
+                  "change it.")
+    meta["mention_only"] = (mode == "on")
+    room_meta_write(cwd, meta)
+    log.info("room %s: mention-only mode %s",
+             os.path.basename(cwd), mode)
+    return ("Only messages that @mention me are handled in this room "
+            "now."
+            if mode == "on"
+            else "Mentions are no longer required in this room.")
+
+
 # ------------------------------------------------------- bot lifecycle ----
 # Talk sends dedicated ActivityPub events when this bot is added to or
 # removed from a room (BotController enable/disable -> Join / Leave
@@ -239,8 +270,22 @@ def handle_thinking_command(message, cwd):
 GREETING_FMT = (
     "Hi {room}, I'm {bot} \u2014 I run the pi coding agent in this room. "
     "Send /pw <nextcloud-user> <app-password> to enable Nextcloud file "
-    "access. Use /thinking (or /t) to see my last reasoning and /clean "
-    "(or /c) to reset my memory."
+    "access. Use /thinking (or /t) to see my last reasoning, /clean "
+    "(or /c) to reset my memory, and /help (or /h) for all commands."
+)
+
+HELP_TEXT = (
+    "commands for this room:\n"
+    "  /thinking (or /t) \u2014 post my last reasoning\n"
+    "  /clean (or /c) \u2014 reset my memory and workspace\n"
+    "  /stop (or /s) \u2014 abort the running pi run\n"
+    "  /schedule list \u2014 show the scheduled tasks\n"
+    "  /schedule rm <id> \u2014 remove one, e.g. /schedule rm at-news\n"
+    "  /mention on | off | status (or /m on) \u2014 only react when "
+    "@mentioned\n"
+    "  /pw <user> <app-password> \u2014 enable file access\n"
+    "  /version \u2014 show the pigeon version\n"
+    "  /help (or /h) \u2014 this list"
 )
 
 

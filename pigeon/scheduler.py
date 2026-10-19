@@ -20,6 +20,7 @@ next_run is maintained by pigeon and persisted into the file.
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -250,6 +251,102 @@ def advance_next_run(entry, now):
             nxt = _next_window_start(entry, nxt)
         return _snap_to_weekday(entry, nxt)
     return None
+
+
+# ------------------------------------------------------- /schedule cmd ----
+# Room commands (handled in web.py): list this room's schedules or remove
+# one by id. Creating and editing entries is left to pi (see the
+# scheduler skill).
+
+WD_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _load_schedules(cwd):
+    """(data, entries) of the room's schedules.json, or (None, []) when
+    the file is missing or broken."""
+    path = os.path.join(cwd, "workspace", "schedules.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return None, []
+    if not isinstance(data, dict) or \
+            not isinstance(data.get("schedules"), list):
+        return None, []
+    entries = [e for e in data["schedules"] if isinstance(e, dict)]
+    return data, entries
+
+
+def _save_schedules(cwd, data):
+    path = os.path.join(cwd, "workspace", "schedules.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
+def _fmt_entry(e):
+    """One readable line per schedule entry for /schedule list."""
+    what = (e.get("prompt") or "").strip().replace("\n", " ")[:60]
+    if (e.get("time") or "").strip():
+        when = f"daily at {e['time'].strip()}"
+        tz = (e.get("tz") or "").strip()
+        if tz and tz != "UTC":
+            when += f" ({tz})"
+    else:
+        every = e.get("every_minutes")
+        when = (f"every {every:g} min"
+                if isinstance(every, (int, float))
+                and not isinstance(every, bool)
+                else "at an interval")
+        st = (e.get("start_time") or "").strip()
+        if st:
+            when += f" (phase {st})"
+        w = e.get("window") or {}
+        if isinstance(w, dict) and w.get("start") and w.get("end"):
+            when += f", only {w['start']}\u2013{w['end']}"
+    wds = e.get("weekdays")
+    if isinstance(wds, (list, tuple)) and wds:
+        try:
+            names = [WD_NAMES[int(w)] for w in wds]
+        except (TypeError, ValueError, IndexError):
+            names = []
+        if names:
+            when += ", " + "/".join(names)
+    return f"\u2022 {e.get('id') or '?'} \u2014 {what} \u2014 {when}"
+
+
+def handle_schedule_command(message, cwd):
+    """Handle /schedule list and /schedule rm <id> for this room. Returns
+    the reply to post, or None when the message is not a /schedule
+    command."""
+    m = re.match(r"^/schedule\s+(list|rm)\s*(\S*)\s*$", message or "")
+    if not m:
+        return None
+    cmd = m.group(1)
+    data, entries = _load_schedules(cwd)
+
+    if cmd == "list":
+        if not entries:
+            return ("No scheduled tasks in this room yet \u2014 just tell "
+                    "me what to run and when.")
+        return ("Scheduled tasks:\n" +
+                "\n".join(_fmt_entry(e) for e in entries))
+
+    # rm <id>
+    sid = m.group(2)
+    if not sid or data is None:
+        return "Usage: /schedule rm <id> (see /schedule list)."
+    before = len(data["schedules"])
+    data["schedules"] = [e for e in data["schedules"]
+                         if not (isinstance(e, dict)
+                                 and e.get("id") == sid)]
+    if len(data["schedules"]) == before:
+        return f"No scheduled task with id \u201c{sid}\u201d in this room."
+    _save_schedules(cwd, data)
+    log.info("scheduler: %s: entry %r removed via /schedule rm",
+             os.path.basename(cwd), sid)
+    return f"Removed scheduled task \u201c{sid}\u201d."
 
 
 # ------------------------------------------------------------- tick -------
