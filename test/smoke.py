@@ -4,7 +4,7 @@ Run:  python test/smoke.py
 Covers: pi-config gate, HMAC webhook verification, payload parsing,
 queueing, pi JSONL parsing (thinking + answer), posting via the bot API
 (with outgoing signature verification), retry, heartbeat timeout kill,
-/pw, /clean (session + workspace wipe), bot Join/Leave webhooks, file +
+!pw, !clean (session + workspace wipe), bot Join/Leave webhooks, file +
 voice (STT) messages, the /nc proxy, batch window, restart recovery,
 scheduler, skills sync.
 

@@ -14,10 +14,10 @@ from harness import (FakePopen, check, http, new_payload, signed_webhook,
 
 def run():
     ncx_cwd = os.path.join(os.environ["BOTS_DIR"], "bot1", "rooms", "ncx")
-    s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+    s, body = signed_webhook("bot1", new_payload("!pw ncuser ncpw123",
                                                  room_token="ncx0001",
                                                  room_name="Ncx"))
-    check("/nc room pw set", s == 200 and body.get("handled") == "/pw",
+    check("/nc room pw set", s == 200 and body.get("handled") == "!pw",
           str(body))
     H = nc_stub.H
     tok = nc_token("bot1", "ncx")
@@ -111,7 +111,7 @@ def run():
           c == 200 and all(e["uid"] != new_uid
                            for e in H.events.get("family", [])), str(b))
     # token is room-scoped: the same token must not open another room
-    s, body = signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+    s, body = signed_webhook("bot1", new_payload("!pw ncuser ncpw123",
                                                  room_token="othrm001",
                                                  room_name="Oth"))
     c, _ = http("/nc/bot1/oth/files",

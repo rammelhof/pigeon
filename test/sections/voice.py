@@ -1,6 +1,6 @@
 """Section 4e: voice messages (audio/wav, audio/mpeg). Without STT config an
 error is posted, not queued; with config but no app password the user is
-told to /pw; otherwise the file is downloaded, transcribed via the STT
+told to !pw; otherwise the file is downloaded, transcribed via the STT
 endpoint, the text is posted back with an ear emoji and handed to pi.
 """
 import json
@@ -43,11 +43,11 @@ def run():
     voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
     check("wav with config but no app password: error posted, nothing sent",
           s == 200 and body.get("handled") == "stt-no-credentials"
-          and "/pw <nextcloud-user> <app-password>" in voic_posts[-1]
+          and "!pw <nextcloud-user> <app-password>" in voic_posts[-1]
           and not nc_stub.H.stt_calls,
           str(body) + str(voic_posts[-1:]))
 
-    signed_webhook("bot1", new_payload("/pw ncuser ncpw123",
+    signed_webhook("bot1", new_payload("!pw ncuser ncpw123",
                                        room_token="voicerm001",
                                        room_name="Voice Room"))
     wav_bytes = b"RIFF\x00\x01\x02\x03WAVEfmt \xff\xfe\x00fake-wav"

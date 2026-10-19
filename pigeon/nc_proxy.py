@@ -67,7 +67,7 @@ def _authorized(bot, room):
     creds = room_creds(room_dir)
     if creds is None:
         return None, (jsonify({"error": "room has no Nextcloud app password "
-                                        "— send: /pw <user> <app-password>"}),
+                                        "— send: !pw <user> <app-password>"}),
                       403)
     return creds, None
 

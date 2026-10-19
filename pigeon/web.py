@@ -25,7 +25,7 @@ from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    folder_for_room, handle_bot_added, handle_bot_removed,
                    handle_mention_command, handle_pw_command,
                    handle_thinking_command, room_creds, room_dir,
-                   room_meta_read, write_room_token)
+                   room_meta_read, strip_mention, write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -145,7 +145,8 @@ def webhook(bot):
     if parsed["action"] == "bot_joined":
         os.makedirs(cwd, exist_ok=True)
         write_room_token(cwd, room)  # needed for scheduled tasks to reply
-        reply = handle_bot_added(bot, room_name, cwd)
+        reply = handle_bot_added(parsed.get("bot_name") or bot, room_name,
+                                 cwd)
         if reply:
             post_message(room, reply)
             return jsonify({"handled": "greet"}), 200
@@ -177,56 +178,59 @@ def webhook(bot):
     reply = handle_pw_command(message, cwd, room)
     if reply is not None:
         post_message(room, reply)
-        return jsonify({"handled": "/pw"}), 200
+        return jsonify({"handled": "!pw"}), 200
 
-    # room command: /clean (+ /c) -> drop the pi sessions AND wipe the
+    # room command: !clean (+ !c) -> drop the pi sessions AND wipe the
     # workspace, so the next message starts a fresh pi session with no
     # files behind
-    if message in ("/clean", "/c"):
+    if message in ("!clean", "!c"):
         post_message(room, clean_session_and_workspace(cwd))
-        return jsonify({"handled": "/clean"}), 200
+        return jsonify({"handled": "!clean"}), 200
 
-    # room command: /thinking (+ /t) -> post pi's last saved thinking
+    # room command: !thinking (+ !t) -> post pi's last saved thinking
     reply = handle_thinking_command(message, cwd)
     if reply is not None:
         post_message(room, reply)
-        return jsonify({"handled": "/thinking"}), 200
+        return jsonify({"handled": "!thinking"}), 200
 
-    # room commands: /stop (or /s), /schedule list|rm, /mention, /help
-    # (or /h), /version — none of these ever reach pi
-    if message in ("/stop", "/s"):
+    # room commands: !stop (or !s), !schedule list|rm, !mention, !help
+    # (or !h), !version (or !v) — none of these ever reach pi
+    if message in ("!stop", "!s"):
         stopped = tasks.stop_running(cwd)
         post_message(room,
                      "pi run stopped \u2014 the room is free again."
                      if stopped else
                      "Nothing is running in this room right now.")
-        return jsonify({"handled": "/stop"}), 200
+        return jsonify({"handled": "!stop"}), 200
 
     reply = scheduler.handle_schedule_command(message, cwd)
     if reply is not None:
         post_message(room, reply)
-        return jsonify({"handled": "/schedule"}), 200
+        return jsonify({"handled": "!schedule"}), 200
 
     reply = handle_mention_command(message, cwd)
     if reply is not None:
         post_message(room, reply)
-        return jsonify({"handled": "/mention"}), 200
+        return jsonify({"handled": "!mention"}), 200
 
-    if message in ("/help", "/h"):
-        post_message(room, HELP_TEXT)
-        return jsonify({"handled": "/help"}), 200
+    meta = room_meta_read(cwd)
+    if message in ("!help", "!h"):
+        names = [n for n in (meta.get("bot_name"), "bot") if n]
+        mention = " or ".join("@" + n for n in names)
+        post_message(room, HELP_TEXT.format(mention=mention))
+        return jsonify({"handled": "!help"}), 200
 
-    if message == "/version":
+    if message in ("!version", "!v"):
         post_message(room, f"pigeon {VERSION} ({COMMIT})")
-        return jsonify({"handled": "/version"}), 200
+        return jsonify({"handled": "!version"}), 200
 
-    # mention mode: when on, only messages that @mention the bot reach
-    # pi (the mention is stripped first) — commands above always work
-    if room_meta_read(cwd).get("mention_only"):
-        m = re.match(r"^@\S+\s*(.*)$", message, re.S)
-        if not m:
+    # mention mode: when on, only messages that mention the bot
+    # (@<bot name> or @bot) reach pi (the mention is stripped first) —
+    # the commands above always work
+    if meta.get("mention_only"):
+        message = strip_mention(message, meta.get("bot_name"))
+        if message is None:
             return jsonify({"ignored": "no mention"}), 200
-        message = m.group(1).strip()
         if not message:
             return jsonify({"ignored": "empty message"}), 200
 
@@ -286,7 +290,7 @@ def handle_voice_message(bot, folder, room, f, cwd, sender, message_id=""):
     if creds is None:
         reply = ("⚠ I cannot download voice messages: this room has no "
                  "app password for file access yet. Send "
-                 "/pw <nextcloud-user> <app-password> first.")
+                 "!pw <nextcloud-user> <app-password> first.")
         post_message(room, reply)
         return jsonify({"handled": "stt-no-credentials"}), 200
 

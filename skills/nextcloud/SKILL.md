@@ -13,7 +13,7 @@ lives ~24 h).
 
 `<bot>` and `<room>` are the two parts of your session id
 (`<bot>_<room>`). If the proxy answers `403 room has no Nextcloud app
-password`, tell the user to send `/pw <nextcloud-user> <app-password>` in
+password`, tell the user to send `!pw <nextcloud-user> <app-password>` in
 this room — do not try to work around it.
 
 ## Files

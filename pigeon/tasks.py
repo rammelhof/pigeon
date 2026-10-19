@@ -124,13 +124,13 @@ def run_job(key, bot, job):
     os.makedirs(job["workspace"], exist_ok=True)
     mark_running(job["cwd"], task)
 
-    # pi's thinking is saved to the room folder for the /thinking
+    # pi's thinking is saved to the room folder for the !thinking
     # command — it is never posted to the room on its own; only the
     # robot reaction (start) and the answer (result) reach the chat.
     # live progress indicator: one bot reaction on the (last) user
     # message, set when pi starts. The reaction is kept after the run
     # finishes — reactions are only ever added, never removed (any
-    # change would notify the room) — except on /stop.
+    # change would notify the room) — except on !stop.
     inds = _indicators(job)
 
     def ind(name, *args):
@@ -141,7 +141,7 @@ def run_job(key, bot, job):
         while True:
             if task.get("stopped"):
                 task["status"] = "stopped"
-                break  # /stop: end quietly (no post, no retry)
+                break  # !stop: end quietly (no post, no retry)
             try:
                 ind("started")
                 answer, thinking = run_pi_once(task)
@@ -149,7 +149,7 @@ def run_job(key, bot, job):
                 task["error"] = str(e)
                 if task.get("stopped"):
                     task["status"] = "stopped"
-                    break  # /stop: end quietly (no post, no retry)
+                    break  # !stop: end quietly (no post, no retry)
                 if task["retries"] >= MAX_RETRIES:
                     raise
                 task["retries"] += 1
@@ -165,7 +165,7 @@ def run_job(key, bot, job):
                 raise RuntimeError("pi produced no answer")
 
             # shut the indicator thread down (the reaction stays), save
-            # the thinking for /thinking, then post the answer
+            # the thinking for !thinking, then post the answer
             for i in inds:
                 i.stop()
             if thinking:
@@ -175,7 +175,7 @@ def run_job(key, bot, job):
             break
     except Exception as e:
         if task.get("stopped"):
-            # /stop: the run was aborted by the user — not a failure,
+            # !stop: the run was aborted by the user — not a failure,
             # nothing is posted
             task["status"] = "stopped"
             log.info("task %s stopped by user", task["id"])

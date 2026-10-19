@@ -3,7 +3,7 @@ Every room's messaging goes through the signed Talk bot API only: when
 pi starts, the bot reacts to the user's message with a robot emoji and
 then leaves it (never removed, so the run's end stays quiet); after
 the run, only the answer is posted — pi's thinking is saved to the
-room folder for the /thinking command, never posted on its own.
+room folder for the !thinking command, never posted on its own.
 """
 import os
 

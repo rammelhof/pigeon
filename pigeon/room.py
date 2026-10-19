@@ -129,16 +129,16 @@ def clear_running(cwd, task_id):
     state_update(cwd, upd)
 
 
-# ------------------------------------------------------------- /pw cmd ----
+# ------------------------------------------------------------- !pw cmd ----
 # Stored per room (isolation between rooms); the command never reaches pi.
 
-PW_SET_RE = re.compile(r"^/pw\s+(\S+)\s+(\S+)\s*$")
-PW_STATUS_RE = re.compile(r"^/pw\s*$")
+PW_SET_RE = re.compile(r"^!pw\s+(\S+)\s+(\S+)\s*$")
+PW_STATUS_RE = re.compile(r"^!pw\s*$")
 
 
 def handle_pw_command(message, cwd, room):
-    """Handle /pw for this room. Returns the reply to post, or None when
-    the message is not a /pw command."""
+    """Handle !pw for this room. Returns the reply to post, or None when
+    the message is not a !pw command."""
     m = PW_SET_RE.match(message)
     if m:
         meta = room_meta_read(cwd)
@@ -154,13 +154,13 @@ def handle_pw_command(message, cwd, room):
         if creds:
             return f"File access is configured for user: {creds[0]}."
         return ("File access is not configured for this room. Send "
-                "/pw <nextcloud-user> <app-password> to enable file "
+                "!pw <nextcloud-user> <app-password> to enable file "
                 "downloads.")
     return None
 
 
-# ------------------------------------------------------------ /clean cmd --
-# Stored per room; the command never reaches pi. /clean drops the pi
+# ------------------------------------------------------------ !clean cmd --
+# Stored per room; the command never reaches pi. !clean drops the pi
 # session AND wipes the room's workspace completely (fresh pi session
 # with no files left behind).
 
@@ -185,12 +185,12 @@ def clean_session_and_workspace(cwd):
             "nothing to clear.")
 
 
-# ---------------------------------------------------------- /thinking cmd --
+# ---------------------------------------------------------- !thinking cmd --
 # pi's last thinking is saved to the room folder by the worker after
-# every run (tasks.py); /thinking (+ /t) posts it back to the room.
+# every run (tasks.py); !thinking (+ !t) posts it back to the room.
 
 THINKING_FILE = "last-thinking.md"
-THINKING_CMD_RE = re.compile(r"^/(thinking|t)$")
+THINKING_CMD_RE = re.compile(r"^!(thinking|t)$")
 
 
 def save_thinking(cwd, text):
@@ -219,8 +219,8 @@ def quoted(text):
 
 
 def handle_thinking_command(message, cwd):
-    """Handle /thinking (or /t) for this room. Returns the reply to post,
-    or None when the message is not a /thinking command."""
+    """Handle !thinking (or !t) for this room. Returns the reply to post,
+    or None when the message is not a !thinking command."""
     if not THINKING_CMD_RE.match(message):
         return None
     thinking = load_thinking(cwd)
@@ -230,35 +230,50 @@ def handle_thinking_command(message, cwd):
     return "\U0001f914 " + quoted(thinking)
 
 
-# --------------------------------------------------------- /mention cmd --
+# --------------------------------------------------------- !mention cmd --
 # When on, a message is only handled if it @mentions the bot first (the
 # mention is stripped before pi sees it). Persisted in .room.json.
 
-MENTION_CMD_RE = re.compile(r"^/(mention|m)\s+(on|off|status)\s*$")
+MENTION_CMD_RE = re.compile(r"^!(mention|m)\s+(on|off|status)\s*$")
 
 
 def handle_mention_command(message, cwd):
-    """Handle /mention on|off|status (or /m …). Returns the reply to
-    post, or None when the message is not a /mention command."""
+    """Handle !mention on|off|status (or !m …). Returns the reply to
+    post, or None when the message is not a !mention command."""
     m = MENTION_CMD_RE.match(message or "")
     if not m:
         return None
     mode = m.group(2)
     meta = room_meta_read(cwd)
+    names = [n for n in (meta.get("bot_name"), "bot") if n]
+    mention = " or ".join("@" + n for n in names)
     if mode == "status":
         return ("@mentions are "
                 + ("required" if meta.get("mention_only") else "not "
                    "required")
-                + " in this room. Use /mention on or /mention off to "
+                + " in this room. Use !mention on or !mention off to "
                   "change it.")
     meta["mention_only"] = (mode == "on")
     room_meta_write(cwd, meta)
     log.info("room %s: mention-only mode %s",
              os.path.basename(cwd), mode)
-    return ("Only messages that @mention me are handled in this room "
-            "now."
+    return ("Only messages starting with " + mention + " are handled in "
+            "this room now."
             if mode == "on"
             else "Mentions are no longer required in this room.")
+
+
+def strip_mention(message, bot_name):
+    """If the message starts with a mention of this bot ("@<bot name>"
+    or "@bot"), return the rest of the message (stripped); otherwise
+    None. Case-insensitive, matched at a word boundary."""
+    names = [n for n in (bot_name, "bot") if n]
+    names.sort(key=len, reverse=True)  # longest first, no prefix matches
+    m = re.match(r"^@(" + "|".join(re.escape(n) for n in names) +
+                 r")\b(.*)$", message or "", re.S | re.I)
+    if not m:
+        return None
+    return m.group(2).strip()
 
 
 # ------------------------------------------------------- bot lifecycle ----
@@ -269,23 +284,24 @@ def handle_mention_command(message, cwd):
 
 GREETING_FMT = (
     "Hi {room}, I'm {bot} \u2014 I run the pi coding agent in this room. "
-    "Send /pw <nextcloud-user> <app-password> to enable Nextcloud file "
-    "access. Use /thinking (or /t) to see my last reasoning, /clean "
-    "(or /c) to reset my memory, and /help (or /h) for all commands."
+    "Send !pw <nextcloud-user> <app-password> to enable Nextcloud file "
+    "access. Mention me as @{bot} or @bot to get my attention, use "
+    "!thinking (or !t) to see my last reasoning, !clean (or !c) to "
+    "reset my memory, and !help (or !h) for all commands."
 )
 
 HELP_TEXT = (
     "commands for this room:\n"
-    "  /thinking (or /t) \u2014 post my last reasoning\n"
-    "  /clean (or /c) \u2014 reset my memory and workspace\n"
-    "  /stop (or /s) \u2014 abort the running pi run\n"
-    "  /schedule list \u2014 show the scheduled tasks\n"
-    "  /schedule rm <id> \u2014 remove one, e.g. /schedule rm at-news\n"
-    "  /mention on | off | status (or /m on) \u2014 only react when "
-    "@mentioned\n"
-    "  /pw <user> <app-password> \u2014 enable file access\n"
-    "  /version \u2014 show the pigeon version\n"
-    "  /help (or /h) \u2014 this list"
+    "  !thinking (or !t) \u2014 post my last reasoning\n"
+    "  !clean (or !c) \u2014 reset my memory and workspace\n"
+    "  !stop (or !s) \u2014 abort the running pi run\n"
+    "  !schedule list \u2014 show the scheduled tasks\n"
+    "  !schedule rm <id> \u2014 remove one, e.g. !schedule rm at-news\n"
+    "  !mention on | off | status (or !m on) \u2014 only react when "
+    "mentioned ({mention})\n"
+    "  !pw <user> <app-password> \u2014 enable file access\n"
+    "  !version (or !v) \u2014 show the pigeon version\n"
+    "  !help (or !h) \u2014 this list"
 )
 
 
@@ -300,8 +316,14 @@ def mark_greeted(cwd):
 
 
 def handle_bot_added(bot, room_name, cwd):
-    """Join webhook: post the one-time greeting. Returns the message to
-    post, or None when this room was already greeted."""
+    """Join webhook: post the one-time greeting and remember the bot's
+    Talk name (for the mention gate). Returns the message to post, or
+    None when this room was already greeted."""
+    if bot:
+        meta = room_meta_read(cwd)
+        if meta.get("bot_name") != bot:
+            meta["bot_name"] = bot
+            room_meta_write(cwd, meta)
     if _meta_greeted(cwd):
         return None
     mark_greeted(cwd)

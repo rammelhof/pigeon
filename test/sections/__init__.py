@@ -7,8 +7,8 @@ Order matters: later sections build on the state earlier ones created
 SECTIONS = [
     "basic",      # pi-config gate, health, signature, bot name
     "message",    # webhook -> task done, bubblewrap sandbox
-    "room",       # /pw, /clean, bot Join/Leave
-    "commands",   # /help, /version, /stop, /mention, /schedule, burst
+    "room",       # !pw, !clean, bot Join/Leave
+    "commands",   # !help, !version, !stop, !mention, !schedule, burst
                   #     reaction rule
     "files",      # file messages (no pw, by id, text event, bad credentials)
     "thinking",   # live thinking bubble (chat web API)

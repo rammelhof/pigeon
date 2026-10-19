@@ -253,7 +253,7 @@ def advance_next_run(entry, now):
     return None
 
 
-# ------------------------------------------------------- /schedule cmd ----
+# ------------------------------------------------------- !schedule cmd ----
 # Room commands (handled in web.py): list this room's schedules or remove
 # one by id. Creating and editing entries is left to pi (see the
 # scheduler skill).
@@ -286,7 +286,7 @@ def _save_schedules(cwd, data):
 
 
 def _fmt_entry(e):
-    """One readable line per schedule entry for /schedule list."""
+    """One readable line per schedule entry for !schedule list."""
     what = (e.get("prompt") or "").strip().replace("\n", " ")[:60]
     if (e.get("time") or "").strip():
         when = f"daily at {e['time'].strip()}"
@@ -317,10 +317,10 @@ def _fmt_entry(e):
 
 
 def handle_schedule_command(message, cwd):
-    """Handle /schedule list and /schedule rm <id> for this room. Returns
-    the reply to post, or None when the message is not a /schedule
+    """Handle !schedule list and !schedule rm <id> for this room. Returns
+    the reply to post, or None when the message is not a !schedule
     command."""
-    m = re.match(r"^/schedule\s+(list|rm)\s*(\S*)\s*$", message or "")
+    m = re.match(r"^!schedule\s+(list|rm)\s*(\S*)\s*$", message or "")
     if not m:
         return None
     cmd = m.group(1)
@@ -336,7 +336,7 @@ def handle_schedule_command(message, cwd):
     # rm <id>
     sid = m.group(2)
     if not sid or data is None:
-        return "Usage: /schedule rm <id> (see /schedule list)."
+        return "Usage: !schedule rm <id> (see !schedule list)."
     before = len(data["schedules"])
     data["schedules"] = [e for e in data["schedules"]
                          if not (isinstance(e, dict)
@@ -344,7 +344,7 @@ def handle_schedule_command(message, cwd):
     if len(data["schedules"]) == before:
         return f"No scheduled task with id \u201c{sid}\u201d in this room."
     _save_schedules(cwd, data)
-    log.info("scheduler: %s: entry %r removed via /schedule rm",
+    log.info("scheduler: %s: entry %r removed via !schedule rm",
              os.path.basename(cwd), sid)
     return f"Removed scheduled task \u201c{sid}\u201d."
 

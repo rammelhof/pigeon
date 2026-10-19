@@ -229,15 +229,15 @@ All in `.env` (compose reads it automatically):
   keeps its own credentials in
   its `.room.json` (`{"token": …, "nextcloud_user": …,
   "nextcloud_password": …}`, mode 600) — rooms do not share information
-  or accounts. Set it by sending `/pw <user> <app-password>` in the room
-  (`/pw` alone shows the status); pigeon intercepts the command, stores
+  or accounts. Set it by sending `!pw <user> <app-password>` in the room
+  (`!pw` alone shows the status); pigeon intercepts the command, stores
   it per room and never lets it reach pi. While a room has no app
   password, a file message triggers a task where the bot is instructed to
   tell the user — in the user's own language — that the password for
   file access is missing and how to set it. Downloads are capped at
   `MAX_FILE_SIZE_MB`; failures become a hint with the share link so the
   bot can still react. Use *app passwords* (Personal Information →
-  Security), one per room if you want different permissions; the `/pw`
+  Security), one per room if you want different permissions; the `!pw`
   chat message stays in the room history — delete it afterwards or edit
   `.room.json` on the host instead.
 

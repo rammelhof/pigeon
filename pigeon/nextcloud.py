@@ -175,7 +175,7 @@ def apply_file_param(message, f, cwd):
                 "server could not download it. Reply to the user — in the "
                 "same language they are using — that the app password for "
                 "file access is missing, and tell them to enable it by "
-                "sending: /pw <nextcloud-user> <app-password>")
+                "sending: !pw <nextcloud-user> <app-password>")
     try:
         file_id = int(f.get("id"))
     except (TypeError, ValueError):

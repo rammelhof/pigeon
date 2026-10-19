@@ -33,7 +33,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * pi is invoked as `pi --mode json --session-id <bot>_<room> "<message>"`. The
   JSONL event stream is
   parsed; pi's **thinking** is saved to the room folder (for the
-  `/thinking` command, see below) and the **answer** is posted back via
+  `!thinking` command, see below) and the **answer** is posted back via
   the official Talk bot API
   (`POST /ocs/v2.php/apps/spreed/api/v1/bot/<roomToken>/message`,
   `OCS-APIRequest: true`, signed with the same secret — see the
@@ -41,7 +41,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   All room messaging goes through this bot API only.
 * **Thinking, on request only**: when pi produced thinking, it is
   saved to `<room dir>/last-thinking.md` — it is never posted to the
-  room on its own. Send `/thinking` (or `/t`) to get the last thinking
+  room on its own. Send `!thinking` (or `!t`) to get the last thinking
   posted back as a `🤔` + `>`-quoted message; only the robot reaction
   and the result reach the room otherwise.
 * **Progress reaction**: when pi starts, the bot reacts to the user's
@@ -64,8 +64,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   up in the same room session. Each room stores its own Nextcloud
   **app password** (user + password in the room's `.room.json`, never
   shared with other rooms):
-  * in a room, send `/pw <nextcloud-user> <app-password>` to configure
-    it (intercepted by pigeon, never reaches pi); `/pw` shows the status
+  * in a room, send `!pw <nextcloud-user> <app-password>` to configure
+    it (intercepted by pigeon, never reaches pi); `!pw` shows the status
     (the password is never echoed back)
   * while a room has no app password, a file message does not download
     anything — pigeon instead instructs the bot to tell the user **in
@@ -73,7 +73,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
     and how to set it
   * app passwords: create one per room-user in Nextcloud under
     *Personal Information → Security* (do not use real account passwords)
-  * the `/pw` message passes through the room's Talk history — delete it
+  * the `!pw` message passes through the room's Talk history — delete it
     afterwards, or edit `.room.json` on the host for a no-trace setup
 * **Voice messages** (per installation): a Talk voice message is a
   voice attachment (`.wav` or `.mp3`). pigeon downloads it, transcribes it
@@ -118,20 +118,21 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   periodically by the state scan — pigeon re-queues them, so no message
   is lost in a restart or crash; and since every room always runs in its
   stable pi session, context survives too.
-* **Fresh context on demand**: send `/clean` (or `/c`) in a room to wipe
+* **Fresh context on demand**: send `!clean` (or `!c`) in a room to wipe
   its pi session files *and* its workspace folder — including the saved
-  thinking (intercepted by pigeon, like `/pw`) — the next message then
+  thinking (intercepted by pigeon, like `!pw`) — the next message then
   starts a clean pi session with no old history or files.
 * **Last reasoning on demand**: after every run pigeon saves pi's
-  thinking to `<room dir>/last-thinking.md`; send `/thinking` (or `/t`)
+  thinking to `<room dir>/last-thinking.md`; send `!thinking` (or `!t`)
   to post it back into the room as a quote.
 * **More room commands** (all intercepted by pigeon, never reach pi):
-  `/stop` (or `/s`) kills the running pi in this room and ends quietly
+  `!stop` (or `!s`) kills the running pi in this room and ends quietly
   — it also removes the robot reaction, the only reaction pigeon ever
-  removes; `/schedule list` / `/schedule rm <id>` show or drop scheduled
-  tasks; `/mention on|off|status` (aliases `/m …`) makes pigeon only
-  react to messages that @mention it (the mention is stripped); `/help`
-  (or `/h`) lists all commands and `/version` shows the running build.
+  removes; `!schedule list` / `!schedule rm <id>` show or drop
+  scheduled tasks; `!mention on|off|status` (aliases `!m …`) makes pigeon
+  only react to messages that mention it as @<bot name> or @bot (the
+  mention is stripped); `!help` (or `!h`) lists all commands and
+  `!version` (or `!v`) shows the running build.
   When several messages arrive within the batch window they are merged
   into one pi run and only the **last** message is reacted — one
   notification per burst, not one per message.
@@ -302,7 +303,7 @@ pigeon/
   config.py       environment variables + logging
   security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
   room.py         room folders, .room.json (token + app password),
-                  /pw, /clean, /thinking (last-thinking.md), join/leave
+                  !pw, !clean, !thinking (last-thinking.md), join/leave
   nextcloud.py    bot API posting, WebDAV file download, CalDAV helpers
   pi.py           pi config check, bubblewrap sandbox, JSONL run
   tasks.py        per-room queues + workers, retries, heartbeat

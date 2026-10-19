@@ -24,7 +24,7 @@ def run():
     prompted = [p for c, p in FakePopen._seen
                 if c.replace("\\", "/").endswith("bot1/rooms/no-pw-room/workspace")]
     check("pi instructed about the missing app password (in user's language)",
-          any("app password" in p and "/pw <nextcloud-user> <app-password>" in p
+          any("app password" in p and "!pw <nextcloud-user> <app-password>" in p
               for p in prompted), str(prompted)[:250])
     check("no dav SEARCH without credentials",
           len(nc_stub.H.search_calls) == directs_before
@@ -82,7 +82,7 @@ def run():
           str(prompt)[:200])
 
     # 4e. wrong credentials -> failure hint + share link, task still runs
-    signed_webhook("bot1", new_payload("/pw ncuser WRONGpw",
+    signed_webhook("bot1", new_payload("!pw ncuser WRONGpw",
                                        room_token="pwroom0001",
                                        room_name="Pw Room"))
     s, body = signed_webhook("bot1", file_payload("look at {file}",

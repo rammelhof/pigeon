@@ -6,7 +6,7 @@ Event-driven, add-only:
 Nothing else: no reaction when the webhook receives the message,
 nothing while pi thinks, nothing when the run finishes. Reactions are
 only ever set, never removed — any reaction change reaches the room
-as a notification — with one exception: /stop removes the robot
+as a notification — with one exception: !stop removes the robot
 reaction, because the user explicitly ended the run.
 
 The Talk API call happens in one small thread fed by a queue, so the
@@ -22,7 +22,7 @@ from .config import log
 from .nextcloud import react, unreact
 
 EMOJI_STARTED = "\U0001f916"  # 🤖 pi agent started
-_CLEAR = object()  # queue command: remove the last reaction (only /stop)
+_CLEAR = object()  # queue command: remove the last reaction (only !stop)
 
 
 class Indicator:
@@ -51,7 +51,7 @@ class Indicator:
         self._thread.join(timeout=5)
 
     def clear(self):
-        """Remove the last reaction — only used by /stop: the user
+        """Remove the last reaction — only used by !stop: the user
         explicitly ended the run, so the robot reaction is misleading.
         Without the API it simply fails silently."""
         self._q.put(_CLEAR)
