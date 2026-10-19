@@ -261,6 +261,19 @@ def advance_next_run(entry, now):
 WD_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
+def _next_line(e):
+    """[next: Thu 10 Jul 2026 08:00] — the next run, in the entry's tz."""
+    ts = initial_next_run(e, time.time())
+    if not ts:
+        return ""
+    try:
+        zone = ZoneInfo(_entry_tz(e))
+        dt = datetime.fromtimestamp(ts, zone)
+    except Exception:
+        return ""
+    return " [next: %s]" % (dt.strftime("%a %d %b %Y %H:%M"),)
+
+
 def _load_schedules(cwd):
     """(data, entries) of the room's schedules.json, or (None, []) when
     the file is missing or broken."""
@@ -286,7 +299,8 @@ def _save_schedules(cwd, data):
 
 
 def _fmt_entry(e):
-    """One readable line per schedule entry for !schedule list."""
+    """One readable line per schedule entry for !schedule list — the id
+    is backtick-quoted so it can be copied into !schedule rm <id>."""
     what = (e.get("prompt") or "").strip().replace("\n", " ")[:60]
     if (e.get("time") or "").strip():
         when = f"daily at {e['time'].strip()}"
@@ -313,14 +327,14 @@ def _fmt_entry(e):
             names = []
         if names:
             when += ", " + "/".join(names)
-    return f"- `{e.get('id') or '?'}`: {what} \u2014 {when}"
+    return f"- `{e.get('id') or '?'}`: {what} — {when}{_next_line(e)}"
 
 
 SCHEDULE_CMD_RE = re.compile(r"^(?:!schedule|!sch)(?:\s+(.*?))?\s*$")
 
 SCHEDULE_HELP = (
     "Scheduled tasks \u2014 usage:\n"
-    "* `!schedule list` \u2014 show all entries\n"
+    "* `!schedule list` \u2014 show all entries and their next runs\n"
     "* `!schedule rm <id>` \u2014 drop one (the id is shown by `list`)\n"
     "Alias: `!sch \u2026`. New tasks are added by the agent to\n"
     "workspace/schedules.json \u2014 just ask, e.g. “remind me daily at"

@@ -98,9 +98,10 @@ def run():
                                                  room_token="sch00001",
                                                  room_name="Sched Room"))
     posted = _posts("sch00001")
-    check("!schedule list: shows both entries, ids backticked for rm",
+    check("!schedule list: ids backticked for rm, next run shown",
           any("- `at-news`:" in m and "- `daily-weather`:" in m and
-              "08:00" in m and "Europe/Vienna" in m
+              "08:00" in m and "Europe/Vienna" in m and
+              "[next:" in m
               for m in posted), str(posted)[:400])
 
     s, body = signed_webhook("bot1", new_payload(

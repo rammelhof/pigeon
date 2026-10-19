@@ -73,7 +73,16 @@ def run():
     t = wait_room_done("bot2/rooms/hang-room", min_count=2, timeout=30)
     check("hang killed by heartbeat, continued, follow-up processed",
           bool(t) and t["status"] == "done", str(t))
-    state = json.load(open(state_file))
+    state = {}
+    deadline = time.time() + 25
+    while time.time() < deadline:  # the follow-up may still be draining
+        try:
+            state = json.load(open(state_file))
+        except Exception:
+            state = {}
+        if state.get("pending") == [] and state.get("running") is None:
+            break
+        time.sleep(0.3)
     check("state file clean after tasks done",
           state.get("pending") == [] and state.get("running") is None,
           str(state))
