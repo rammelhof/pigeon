@@ -22,7 +22,7 @@ from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
                         post_message, save_download)
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
-                   folder_for_room, handle_bot_added, handle_bot_removed,
+                   resolve_room_folder, handle_bot_added, handle_bot_removed,
                    handle_mention_command, handle_pw_command,
                    handle_thinking_command, room_creds, room_dir,
                    room_meta_read, strip_mention, write_room_token)
@@ -138,7 +138,7 @@ def webhook(bot):
 
     room = parsed["room"]
     room_name = parsed["room_name"]
-    folder = folder_for_room(room, room_name)
+    folder = resolve_room_folder(bot, room, room_name)
     cwd = room_dir(bot, folder)
 
     # bot added to the room -> one-time greeting (no pi involved)

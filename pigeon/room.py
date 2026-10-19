@@ -29,6 +29,18 @@ def folder_for_room(room_id, room_name):
     return clean or f"room-{room_id}"
 
 
+def resolve_room_folder(bot, room, room_name):
+    """Folder for a room, disambiguated by its token: two different
+    Nextcloud rooms may share a display name (e.g. two 1:1s named
+    "Team") — the second one then gets <name-slug>-<token prefix> so
+    workspaces/sessions never mix. Existing rooms keep their plain
+    name folder (the stored token still matches)."""
+    base = folder_for_room(room, room_name)
+    if room_token(room_dir(bot, base)) not in (None, room):
+        return f"{base}-{room[:8]}"
+    return base
+
+
 def room_dir(bot, folder):
     """Room folder under BOTS_DIR for a bot + room folder name."""
     return os.path.join(BOTS_DIR, bot, "rooms", folder)

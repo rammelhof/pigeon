@@ -150,6 +150,38 @@ def run():
     check("Leave on unknown room: ok, no crash",
           s == 200 and body.get("handled") == "wiped", str(body))
 
+    # 4b3b. two different rooms with the same display name -> separate
+    # folders (the second gets the token prefix), no shared state
+    s, body = signed_webhook("bot1", join_leave_payload("aaa11111", "Dup Room"))
+    dup_plain = os.path.join(BOTS_TEST, "bot1", "rooms", "dup-room")
+    check("dup room: first join uses the plain name folder",
+          s == 200 and body.get("handled") == "greet"
+          and json.load(open(os.path.join(dup_plain, ".room.json")))
+          .get("token") == "aaa11111", str(body))
+    s, body = signed_webhook("bot1", join_leave_payload("bbb22222", "Dup Room"))
+    dup_other = os.path.join(BOTS_TEST, "bot1", "rooms", "dup-room-bbb22222")
+    check("dup room: second token gets its own folder (token prefix)",
+          s == 200 and body.get("handled") == "greet"
+          and json.load(open(os.path.join(dup_other, ".room.json")))
+          .get("token") == "bbb22222", str(body))
+    s, body = signed_webhook("bot1",
+                             new_payload("hi from the duplicate",
+                                         room_token="bbb22222",
+                                         room_name="Dup Room"))
+    t = wait_room_done("bot1/rooms/dup-room-bbb22222")
+    check("dup room: duplicate's message runs in its own workspace",
+          s == 202 and bool(t) and t["status"] == "done", str(t))
+    s, body = signed_webhook("bot1",
+                             new_payload("hi from the original",
+                                         room_token="aaa11111",
+                                         room_name="Dup Room"))
+    t = wait_room_done("bot1/rooms/dup-room")
+    check("dup room: original still uses the plain folder",
+          s == 202 and bool(t) and t["status"] == "done", str(t))
+    meta = json.load(open(os.path.join(dup_plain, ".room.json")))
+    check("dup room: original's stored token untouched",
+          meta.get("token") == "aaa11111", str(meta))
+
     # 4b4. !thinking (+ /t): pi's last thinking is saved to the room
     # folder and posted back to the chat
     think_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "think-room")
