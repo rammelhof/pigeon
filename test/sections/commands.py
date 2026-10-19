@@ -98,9 +98,10 @@ def run():
                                                  room_token="sch00001",
                                                  room_name="Sched Room"))
     posted = _posts("sch00001")
-    check("!schedule list: shows both entries",
-          any("at-news" in m and "daily-weather" in m and "08:00" in m
-              and "Europe/Vienna" in m for m in posted), str(posted)[:400])
+    check("!schedule list: shows both entries, ids backticked for rm",
+          any("- `at-news`:" in m and "- `daily-weather`:" in m and
+              "08:00" in m and "Europe/Vienna" in m
+              for m in posted), str(posted)[:400])
 
     s, body = signed_webhook("bot1", new_payload(
         "!schedule rm daily-weather", room_token="sch00001",
@@ -123,6 +124,23 @@ def run():
     check("!schedule rm: unknown id reported",
           any("No scheduled task with id" in m for m in posted),
           str(posted)[:200])
+
+    # 4c2b. bare !schedule -> short usage; !sch alias works
+    s, body = signed_webhook("bot1", new_payload("!schedule",
+                                                 room_token="sch00001",
+                                                 room_name="Sched Room"))
+    check("bare !schedule: short usage help",
+          s == 200 and body.get("handled") == "!schedule"
+          and "!schedule list" in _posts("sch00001")[-1]
+          and "rm <id>" in _posts("sch00001")[-1],
+          str(_posts("sch00001"))[-200:])
+    s, body = signed_webhook("bot1", new_payload("!sch list",
+                                                 room_token="sch00001",
+                                                 room_name="Sched Room"))
+    check("!sch list alias: shows the remaining entry",
+          s == 200
+          and any("- `at-news`:" in m for m in _posts("sch00001")),
+          str(_posts("sch00001"))[-200:])
 
     # 4c3. /stop (+ /s): kills the running pi, ends quietly, removes the
     # robot reaction — the only reaction removal pigeon ever does
@@ -280,3 +298,13 @@ def run():
     done = wait_room_done("bot1/rooms/quiet-room", timeout=25, min_count=2)
     check("!mention off: run finished",
           done is not None and done["status"] == "done", str(done))
+
+    # 4c5b. bare !mention -> short usage
+    s, body = signed_webhook("bot1", new_payload("!mention",
+                                                 room_token="qut00001",
+                                                 room_name="Quiet Room"))
+    check("bare !mention: short usage help",
+          s == 200 and body.get("handled") == "!mention"
+          and "!mention on" in _posts("qut00001")[-1]
+          and "status" in _posts("qut00001")[-1],
+          str(_posts("qut00001"))[-200:])

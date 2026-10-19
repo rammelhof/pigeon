@@ -236,12 +236,23 @@ def handle_thinking_command(message, cwd):
 
 MENTION_CMD_RE = re.compile(r"^!(mention|m)\s+(on|off|status)\s*$")
 
+MENTION_HELP = (
+    "mention mode \u2014 usage:\n"
+    "  !mention on \u2014 only react to messages that start with\n"
+    "    @<bot name> or @bot\n"
+    "  !mention off \u2014 react to every message again\n"
+    "  !mention status \u2014 show the current setting\n"
+    "  (alias: !m on|off|status)"
+)
+
 
 def handle_mention_command(message, cwd):
     """Handle !mention on|off|status (or !m …). Returns the reply to
     post, or None when the message is not a !mention command."""
     m = MENTION_CMD_RE.match(message or "")
     if not m:
+        if message in ("!mention", "!m"):
+            return MENTION_HELP
         return None
     mode = m.group(2)
     meta = room_meta_read(cwd)
@@ -295,10 +306,10 @@ HELP_TEXT = (
     "  !thinking (or !t) \u2014 post my last reasoning\n"
     "  !clean (or !c) \u2014 reset my memory and workspace\n"
     "  !stop (or !s) \u2014 abort the running pi run\n"
-    "  !schedule list \u2014 show the scheduled tasks\n"
+    "  !schedule (or !sch) list \u2014 show the scheduled tasks\n"
     "  !schedule rm <id> \u2014 remove one, e.g. !schedule rm at-news\n"
-    "  !mention on | off | status (or !m on) \u2014 only react when "
-    "mentioned ({mention})\n"
+    "  !mention on|off|status (or !m \u2026) \u2014 only react when "
+    "    mentioned ({mention}); bare !mention / !m shows usage\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"
     "  !version (or !v) \u2014 show the pigeon version\n"
     "  !help (or !h) \u2014 this list"

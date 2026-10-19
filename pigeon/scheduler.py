@@ -313,17 +313,34 @@ def _fmt_entry(e):
             names = []
         if names:
             when += ", " + "/".join(names)
-    return f"\u2022 {e.get('id') or '?'} \u2014 {what} \u2014 {when}"
+    return f"- `{e.get('id') or '?'}`: {what} \u2014 {when}"
+
+
+SCHEDULE_CMD_RE = re.compile(r"^(?:!schedule|!sch)(?:\s+(.*?))?\s*$")
+
+SCHEDULE_HELP = (
+    "Scheduled tasks \u2014 usage:\n"
+    "* `!schedule list` \u2014 show all entries\n"
+    "* `!schedule rm <id>` \u2014 drop one (the id is shown by `list`)\n"
+    "Alias: `!sch \u2026`. New tasks are added by the agent to\n"
+    "workspace/schedules.json \u2014 just ask, e.g. “remind me daily at"
+    " 08:00 to …”.")
 
 
 def handle_schedule_command(message, cwd):
-    """Handle !schedule list and !schedule rm <id> for this room. Returns
-    the reply to post, or None when the message is not a !schedule
-    command."""
-    m = re.match(r"^!schedule\s+(list|rm)\s*(\S*)\s*$", message or "")
+    """Handle !schedule (or !sch) for this room. Returns the reply to
+    post, or None when the message is not a !schedule command.
+
+    Bare `!schedule` (or an unknown subcommand) answers with a short
+    usage hint; `list` shows the entries; `rm <id>` drops one."""
+    m = SCHEDULE_CMD_RE.match(message or "")
     if not m:
         return None
-    cmd = m.group(1)
+    parts = (m.group(1) or "").split()
+    cmd = parts[0] if parts else ""
+    if cmd not in ("list", "rm"):
+        return SCHEDULE_HELP
+    sid = parts[1] if len(parts) > 1 else ""
     data, entries = _load_schedules(cwd)
 
     if cmd == "list":
@@ -334,7 +351,6 @@ def handle_schedule_command(message, cwd):
                 "\n".join(_fmt_entry(e) for e in entries))
 
     # rm <id>
-    sid = m.group(2)
     if not sid or data is None:
         return "Usage: !schedule rm <id> (see !schedule list)."
     before = len(data["schedules"])
