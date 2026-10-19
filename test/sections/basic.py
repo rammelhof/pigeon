@@ -3,6 +3,7 @@ import json
 import os
 
 from harness import PI_CFG, check, get, new_payload, signed_webhook
+from pigeon.config import VERSION
 
 
 def run():
@@ -27,11 +28,11 @@ def run():
           and h.get("pi", {}).get("configured") is True
           and "heartbeat" in h and "tasks" in h)
     check("health reports version + commit",
-          h.get("version") == "1.0.0" and "commit" in h,
+          h.get("version") == VERSION and "commit" in h,
           str(h.get("version")))
     s, idx = get("/")
     check("index reports version + commit",
-          idx.get("version") == "1.0.0" and "commit" in idx, str(idx))
+          idx.get("version") == VERSION and "commit" in idx, str(idx))
 
     # 2. bad signature
     s, body = signed_webhook("bot1", new_payload("hi"), secret="y" * 64)
