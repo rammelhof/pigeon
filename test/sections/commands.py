@@ -309,3 +309,67 @@ def run():
           and "!mention on" in _posts("qut00001")[-1]
           and "status" in _posts("qut00001")[-1],
           str(_posts("qut00001"))[-200:])
+    # 4c6. !mode: persona switch (default programmer <-> office assistant)
+    s, body = signed_webhook("bot1", new_payload("!mode",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!mode (bare): lists the modes and the current one",
+          s == 200 and body.get("handled") == "!mode" and p
+          and "default" in p[-1] and "office" in p[-1]
+          and "this room uses: default" in p[-1],
+          str(p)[-300:])
+
+    s, body = signed_webhook("bot1", new_payload("!mode office",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
+                                       "mode-room", ".room.json")))
+    check("!mode office: confirmed and persisted",
+          s == 200 and body.get("handled") == "!mode"
+          and "Mode: office" in _posts("mdm00001")[-1]
+          and meta.get("mode") == "office",
+          str((body, meta)))
+
+    s, body = signed_webhook("bot1", new_payload("write a memo",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    check("!mode office: message queued", s == 202, str(body))
+    done = wait_room_done("bot1/rooms/mode-room", timeout=25, min_count=1)
+    check("!mode office: run finished (mode does not break pi)",
+          done is not None and done["status"] == "done", str(done))
+
+    # the persona text reaches pi via --append-system-prompt
+    from pigeon.pi import pi_command
+    cmd = pi_command("hi", "bot1_mode-room",
+                     os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room"),
+                     "bot1", "mdm00001", "office")
+    check("pi_command: office mode appends the persona to the system prompt",
+          "--append-system-prompt" in cmd
+          and "office assistant" in " ".join(cmd),
+          " ".join(cmd[:20]))
+    cmd = pi_command("hi", "bot1_mode-room",
+                     os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room"),
+                     "bot1", "mdm00001", "")
+    check("pi_command: default mode injects nothing",
+          "--append-system-prompt" not in cmd, " ".join(cmd[:20]))
+
+    s, body = signed_webhook("bot1", new_payload("!mode nope",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!mode nope: unknown mode -> the list",
+          s == 200 and body.get("handled") == "!mode" and p
+          and "Unknown mode" in p[-1] and "office" in p[-1],
+          str(p)[-300:])
+
+    s, body = signed_webhook("bot1", new_payload("!mode default",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
+                                       "mode-room", ".room.json")))
+    check("!mode default: back to pi's native prompt, meta cleared",
+          s == 200 and "native programmer" in _posts("mdm00001")[-1]
+          and "mode" not in meta,
+          str((body, meta)))
+

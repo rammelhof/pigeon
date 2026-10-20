@@ -14,7 +14,7 @@ import re
 import shutil
 import threading
 
-from .config import BOTS_DIR, log
+from .config import BOTS_DIR, MODES_DIR, log
 
 BOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BOT_DIR_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -299,6 +299,91 @@ def strip_mention(message, bot_name):
     return m.group(2).strip()
 
 
+# ------------------------------------------------------------ persona ----
+# A persona is one .md file in pigeon/modes/; its text is appended to
+# pi's system prompt for every run of the room (pi's --append-system-
+# prompt). No file = "default" = pi's native programmer prompt.
+# The active mode lives in .room.json ("mode"), like the other room
+# settings — it survives !clean, is gone with the room on bot leave.
+
+MODE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}")
+MODE_CMD_RE = re.compile(r"^!mode(?:\s+(\S+))?\s*$")
+
+
+def list_modes():
+    """Available personas: (name, description) from the .md files in
+    MODES_DIR; the description is the file's first non-empty line."""
+    out = []
+    if os.path.isdir(MODES_DIR):
+        for fn in sorted(os.listdir(MODES_DIR)):
+            if not fn.endswith(".md"):
+                continue
+            name = fn[:-3]
+            if not MODE_NAME_RE.fullmatch(name):
+                continue
+            try:
+                with open(os.path.join(MODES_DIR, fn),
+                          encoding="utf-8") as f:
+                    desc = next((ln.strip() for ln in f if ln.strip()), "")
+            except OSError:
+                desc = ""
+            out.append((name, desc))
+    return out
+
+
+def room_mode(cwd):
+    """The room's active persona ("" = pi's default prompt)."""
+    return room_meta_read(cwd).get("mode") or ""
+
+
+def set_room_mode(cwd, mode):
+    meta = room_meta_read(cwd)
+    if mode:
+        meta["mode"] = mode
+    else:
+        meta.pop("mode", None)
+    room_meta_write(cwd, meta)
+    log.info("room %s: persona mode %s", os.path.basename(cwd), mode or "default")
+
+
+def mode_text(mode):
+    """The text to append to pi's system prompt for a mode, or None for
+    the default mode / unknown names."""
+    if not mode or not MODE_NAME_RE.fullmatch(mode):
+        return None
+    path = os.path.join(MODES_DIR, mode + ".md")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def handle_mode_command(message, cwd):
+    """Handle !mode [name]: show or switch the room's persona. Returns
+    the reply to post, or None when the message is not a !mode command."""
+    m = MODE_CMD_RE.match(message or "")
+    if not m:
+        return None
+    arg = (m.group(1) or "list").lower()
+    modes = list_modes()
+    names = ["default"] + [n for n, _ in modes]
+    if arg == "list" or arg == "status":
+        cur = room_mode(cwd)
+        lines = ["- default — pi's native programmer prompt"]
+        lines += ["- {} — {}".format(n, d) for n, d in modes]
+        return ("modes:\n" + "\n".join(lines) +
+                ("\nthis room uses: {}".format(cur or "default")))
+    if arg in names:
+        set_room_mode(cwd, "" if arg == "default" else arg)
+        return ("Mode: default — pi's native programmer prompt."
+                if arg == "default" else
+                "Mode: {} — the persona applies from the next "
+                "message.".format(arg))
+    return ("Unknown mode \u2018{}\u2019. Available: {}".format(
+        arg, ", ".join(names)))
+
+
+
 # ------------------------------------------------------- bot lifecycle ----
 # Talk sends dedicated ActivityPub events when this bot is added to or
 # removed from a room (BotController enable/disable -> Join / Leave
@@ -322,6 +407,8 @@ HELP_TEXT = (
     "  !schedule rm <id> \u2014 remove one, e.g. !schedule rm at-news\n"
     "  !mention on|off|status (or !m \u2026) \u2014 only react when "
     "    mentioned ({mention}); bare !mention / !m shows usage\n"
+    "  !mode [name] \u2014 switch persona (default = programmer, "
+    "office = office assistant); bare !mode lists the modes\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"
     "  !version (or !v) \u2014 show the pigeon version\n"
     "  !help (or !h) \u2014 this list"

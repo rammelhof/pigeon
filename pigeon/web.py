@@ -23,7 +23,7 @@ from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    resolve_room_folder, handle_bot_added, handle_bot_removed,
-                   handle_mention_command, handle_pw_command,
+                   handle_mention_command, handle_mode_command, handle_pw_command,
                    handle_thinking_command, room_creds, room_dir,
                    room_meta_read, strip_mention, write_room_token)
 from .security import verify_webhook_signature
@@ -212,6 +212,11 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "!mention"}), 200
+
+    reply = handle_mode_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "!mode"}), 200
 
     meta = room_meta_read(cwd)
     if message in ("!help", "!h"):

@@ -18,7 +18,7 @@ from .config import (BOTS_DIR, HEARTBEAT_INTERVAL, MAX_RETRIES,
                      STATE_SCAN_EVERY, log)
 from .nextcloud import post_message
 from .pi import run_pi_once
-from .room import (clear_running, mark_running, save_thinking,
+from .room import (clear_running, mark_running, room_mode, save_thinking,
                    state_read, state_update)
 
 _lock = threading.Lock()
@@ -112,6 +112,10 @@ def run_job(key, bot, job):
         "job_ids": job.get("job_ids") or [job["job_id"]],
         "workspace": job["workspace"],
         "session_id": f"{bot}_{os.path.basename(job['cwd'])}",
+        # persona mode is read from the room meta here (single choke
+        # point: webhook, voice and scheduled prompts all pass through),
+        # so it always reflects the current setting at run time
+        "mode": room_mode(job["cwd"]),
         "created_at": time.time(),
         "started_at": time.time(),
         "proc": None,

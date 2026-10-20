@@ -131,8 +131,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   removes; `!schedule list` / `!schedule rm <id>` (alias `!sch …`) show
   or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
-  mention is stripped); `!help` (or `!h`) lists all commands and
-  `!version` (or `!v`) shows the running build.
+  mention is stripped); `!mode [name]` switches the room's persona —
+  `default` (pi's native programmer prompt) or one of the bundled
+  personas in `pigeon/modes/` (currently `office`, an office-assistant
+  persona appended to pi's system prompt); `!help` (or `!h`) lists all
+  commands and `!version` (or `!v`) shows the running build.
   When several messages arrive within the batch window they are merged
   into one pi run and only the **last** message is reacted — one
   notification per burst, not one per message.
@@ -315,10 +318,12 @@ pigeon/
   config.py       environment variables + logging
   security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
   room.py         room folders, .room.json (token + app password +
-                  mention gate), folder disambiguation, !pw, !clean,
-                  !thinking (last-thinking.md), join/leave
+                  mention gate + persona mode), folder disambiguation,
+                  !pw, !clean, !thinking (last-thinking.md), join/leave
+  modes/          persona prompts appended to pi's system prompt (!mode)
   nextcloud.py    bot API posting, reactions, WebDAV/CalDAV client
-  pi.py           pi config check, bubblewrap sandbox, JSONL run
+  pi.py           pi config check, bubblewrap sandbox, JSONL run,
+                  --append-system-prompt persona injection
   tasks.py        per-room queues + workers, retries, heartbeat, !stop
   indicator.py    robot-reaction progress indicator (add-only)
   scheduler.py    schedules.json time math + tick + !schedule command

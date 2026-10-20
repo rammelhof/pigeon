@@ -8,7 +8,7 @@ import subprocess
 import time
 
 from .config import (BOTS_DIR, PI_BIN, PI_CONFIG_DIR, SANDBOX, log)
-from .room import room_creds
+from .room import mode_text, room_creds
 from .security import nc_token
 
 
@@ -23,12 +23,18 @@ def pi_config_status():
     return False, PI_CONFIG_DIR
 
 
-def pi_command(prompt, session_id, cwd, bot, room):
+def pi_command(prompt, session_id, cwd, bot, room, mode=""):
     """Always run in the room's stable pi session: --session-id opens it
     or creates it (first message of a new room). The working directory is
     the room's workspace/ subfolder; when SANDBOX is on and bwrap exists,
-    the whole run is wrapped in a bubblewrap sandbox (full network)."""
-    pi = [PI_BIN, "--mode", "json", "--session-id", session_id, prompt]
+    the whole run is wrapped in a bubblewrap sandbox (full network).
+    A persona mode (pigeon/modes/<mode>.md) is appended to pi's system
+    prompt; mode='' uses pi's native prompt."""
+    pi = [PI_BIN, "--mode", "json", "--session-id", session_id]
+    text = mode_text(mode)
+    if text:
+        pi += ["--append-system-prompt", text]
+    pi.append(prompt)
     ws = os.path.join(cwd, "workspace")
     if not SANDBOX:
         return pi
@@ -146,7 +152,7 @@ def run_pi_once(task):
     stream (pi streams thinking via message_update thinking_delta/end
     events) and from the authoritative message_end content blocks."""
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
-                     task["bot"], task["room_id"])
+                     task["bot"], task["room_id"], task.get("mode") or "")
     log.debug("task %s: running %s", task["id"], " ".join(cmd[:-1]))
     # the full prompt (which may be a batched multi-message one) is only
     # interesting for debugging — keep it at debug level
