@@ -47,8 +47,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * **Progress reaction**: when pi starts, the bot reacts to the user's
   message with 🤖 and then leaves it — no reaction on receive, none
   while pi thinks, none when it finishes (any reaction change would
-  notify the room again). Event-driven, batched messages each get
-  their own reaction. Needs only the bot API (no user credentials); if
+  notify the room again). Batched bursts get a reaction on the **last**
+  message only. Needs only the bot API (no user credentials); if
   Talk rejects the call (older versions) the indicator quietly stops
   and the run is unaffected.
 * **File attachments** (per-room, isolated): Talk sends files as a
@@ -128,8 +128,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * **More room commands** (all intercepted by pigeon, never reach pi):
   `!stop` (or `!s`) kills the running pi in this room and ends quietly
   — it also removes the robot reaction, the only reaction pigeon ever
-  removes; `!schedule list` / `!schedule rm <id>` show or drop
-  scheduled tasks; `!mention on|off|status` (aliases `!m …`) makes pigeon
+  removes; `!schedule list` / `!schedule rm <id>` (alias `!sch …`) show
+  or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!help` (or `!h`) lists all commands and
   `!version` (or `!v`) shows the running build.
@@ -211,7 +211,8 @@ Full guide: **[docs/docker.md](docs/docker.md)**.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/webhook/<bot>` | POST | Talk bot webhook. 202 = queued, 200 = ignored, 400 = bad bot name, 403 = bad token, 503 = not configured |
+| `/webhook/<bot>` | POST | Talk bot webhook. 202 = queued, 200 = ignored, 400 = bad bot name, 403 = bad signature, 503 = not configured |
+| `/nc/<bot>/<room>/…` | GET/PUT/DELETE | Token-gated Nextcloud proxy (files + calendars) so pi can use the user's files via bot credentials |
 | `/health` | GET | Health + pi config + heartbeat + tasks (200 ok / 503 degraded) |
 | `/` | GET | Service info |
 
@@ -220,6 +221,8 @@ Example health output:
 ```json
 {
   "status": "ok",
+  "version": "1.0.2",
+  "commit": "d7c7cdc",
   "pi": {"configured": true, "config_file": "/pi-home/agent/auth.json"},
   "heartbeat": {"last_run": 1760180000.123},
   "stats": {"completed": 12, "failed": 0, "retries": 1, "uptime_seconds": 3600.4},
@@ -259,11 +262,15 @@ Skills are plain folders — see below.
 ## Skills & scheduled tasks
 
 pi supports [skills](https://github.com/badlogic/pi-skills) — folders with a `SKILL.md`
-(name + description + instructions, optionally scripts). pigeon ships two:
+(name + description + instructions, optionally scripts). pigeon ships three:
 
 * **`scheduler`** — teaches pi how to manage this room's `schedules.json`
   (create / list / change / delete scheduled tasks).
-* **`austria-news`** — example content skill (fetches Austrian headlines).
+* **`nextcloud`** — how to reach the user's files, calendars and chats
+  through the `/nc` proxy with the 24 h room token (`!pw` for direct
+  file downloads).
+* **`container-tools`** — what is installed in the image (Python,
+  Node, LibreOffice, …) and when to use it.
 
 They are shipped in the repo (`./skills/`) and baked into the image; at
 startup pigeon copies them into `$PI_CODING_AGENT_DIR/skills` inside the
@@ -289,7 +296,12 @@ every `SCHEDULER_INTERVAL` seconds; when an entry is due it sends its
 queue, survives restarts — `next_run` is persisted). Supported entries:
 
 * daily at `HH:MM` in an IANA timezone (`time` + `tz`)
-* every N minutes (`every_minutes` ≥ 5)
+* every N minutes (`every_minutes` ≥ 5), optionally anchored at a
+  `start_time` phase
+* `window` ({"start": "HH:MM", "end": "HH:MM", "tz": …}) confines runs to a
+  local time span (runs outside snap to the next window start)
+* `weekdays` ([0-6], 0 = Monday) limits an entry to certain days —
+  evaluated in the entry's timezone (e.g. `[0,1,2,3,4]` = Mon–Fri)
 
 A room only gets scheduled messages after it has received at least one
 webhook message (pigeon stores the room's conversation token in
@@ -302,18 +314,22 @@ webhook message (pigeon stores the room's conversation token in
 pigeon/
   config.py       environment variables + logging
   security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
-  room.py         room folders, .room.json (token + app password),
-                  !pw, !clean, !thinking (last-thinking.md), join/leave
-  nextcloud.py    bot API posting, WebDAV file download, CalDAV helpers
+  room.py         room folders, .room.json (token + app password +
+                  mention gate), folder disambiguation, !pw, !clean,
+                  !thinking (last-thinking.md), join/leave
+  nextcloud.py    bot API posting, reactions, WebDAV/CalDAV client
   pi.py           pi config check, bubblewrap sandbox, JSONL run
-  tasks.py        per-room queues + workers, retries, heartbeat
-  scheduler.py    schedules.json time math + tick
+  tasks.py        per-room queues + workers, retries, heartbeat, !stop
+  indicator.py    robot-reaction progress indicator (add-only)
+  scheduler.py    schedules.json time math + tick + !schedule command
   skills.py       bundled skill sync into the pi home
   nc_proxy.py     /nc routes: token-gated Nextcloud proxy for pi
   stt.py          .pigeon.json STT config + voice transcription (wav/mp3)
   web.py          Flask app: /, /health, /webhook/<bot>, startup/shutdown
 wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> pigeon.web.startup())
-skills/           pi skills mounted into the container (scheduler, austria-news, …)
+AGENTS.md         instructions for AI agents working on this repo
+skills/           pi skills mounted into the container (scheduler, nextcloud,
+                  container-tools)
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example
@@ -324,7 +340,7 @@ test/smoke.py     local end-to-end test entry point (starts fakes, runs the
                   sections in test/sections/ in order)
 test/harness.py   shared test setup: fake pi, env, helpers (import = running)
 test/sections/    one module per topic: basic, message, room, files, thinking,
-                  voice, ncproxy, pipeline, restart, scheduler, skills
+                  voice, ncproxy, pipeline, restart, scheduler, skills, commands
 test/nc_stub.py   fake Nextcloud (bot API, verifies outgoing signatures)
 ```
 
@@ -342,5 +358,5 @@ python test/smoke.py   # starts fake Nextcloud + fake pi, exercises the full flo
 * The bot posts results as the bot identity via the signed bot API; it does
   not reply thread-style to the triggering message.
 * Message text is sent to pi verbatim as the prompt; there is no templating.
-* Reactions and management events from Talk are ignored (message events
-  only).
+* Bot join/leave events are handled (greet / total wipe); all other
+  Talk events (reactions, sharing, admin) are ignored.
