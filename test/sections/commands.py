@@ -329,9 +329,13 @@ def run():
     check("!mode (bare): lists modes, marks the default, shows current",
           s == 200 and body.get("handled") == "!mode" and p
           and "programmer" in p[-1] and "office (default)" in p[-1]
-          and "finance" in p[-1] and "trader" in p[-1] and "this room uses: office" in p[-1]
+          and "finance" in p[-1] and "trader" in p[-1]
+          and "sysadmin" in p[-1] and "reviewer" in p[-1]
+          and "writer" in p[-1] and "researcher" in p[-1]
+          and "planner" in p[-1]
+          and "this room uses: office" in p[-1]
           and "start_prompt" not in p[-1],
-          str(p)[-400:])
+          str(p)[-600:])
 
     # switching personas starts a fresh pi session — fabricate one
     # (fake-pi writes no real session files) so the wipe is observable

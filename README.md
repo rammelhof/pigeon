@@ -132,13 +132,19 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!mode [name]` switches the room's persona (a switch starts a fresh pi
-  session): `programmer` (pi's native prompt), `office` (default for all
-  rooms), `finance` (invoicing/payroll/accounting — never assumes a
-  business setup; its start prompt makes pi ask country + language in
-  the first reply of a fresh session) or `trader` (stock & crypto market
-  analysis; live data only, risk first, never quotes prices from memory),
-  all from the .md personas in `pigeon/modes/` appended to pi's system
-  prompt. A mode's `<name>_start_prompt.md` is an instruction appended
+  session) — all from the .md personas in `pigeon/modes/` appended to
+  pi's system prompt: `programmer` (pi's native prompt), `office`
+  (default for all rooms), `finance` (invoicing/payroll/accounting —
+  never assumes a business setup; its start prompt makes pi ask country
+  + language in the first reply of a fresh session), `trader` (stock &
+  crypto market analysis; live data only, risk first, never quotes
+  prices from memory), `sysadmin` (servers/Docker/Nextcloud — verify
+  first, rollback for every change, nothing destructive without
+  confirmation), `reviewer` (code review: bug/risk/nit labels,
+  specific, no padding), `writer` (DE/EN texts, complete copy-ready
+  drafts, no filler), `researcher` (deep dives with dated sources,
+  confidence per claim) and `planner` (messy to-dos → structured plan,
+  realistic estimates, calendar checks). A mode's `<name>_start_prompt.md` is an instruction appended
   to pi's system prompt so **pi itself generates** the setup questions
   (on mode switch and after `!clean`) rather than pigeon posting a
   static message; `!memory` shows the room's long-term memory
