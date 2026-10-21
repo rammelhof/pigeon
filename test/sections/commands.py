@@ -317,7 +317,10 @@ def run():
           and "status" in _posts("qut00001")[-1],
           str(_posts("qut00001"))[-200:])
     # 4c6. !mode: personas (default = office, finance w/ start prompt,
-    # programmer = native pi prompt) + start prompts + !memory
+    # trader, programmer = native pi prompt) + !memory
+    # Start prompts are NOT posted by pigeon — they are appended to pi's
+    # system prompt so pi generates the setup questions itself on the
+    # first reply of a fresh session (mode switches wipe the session).
     s, body = signed_webhook("bot1", new_payload("!mode",
                                                  room_token="mdm00001",
                                                  room_name="Mode Room"))
@@ -329,36 +332,57 @@ def run():
           and "start_prompt" not in p[-1],
           str(p)[-400:])
 
+    # switching personas starts a fresh pi session — fabricate one
+    # (fake-pi writes no real session files) so the wipe is observable
+    ws = os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room")
+    from pigeon.pi import pi_command, session_dir
+    sdir = session_dir(os.path.join(ws, "workspace"))
+    os.makedirs(sdir, exist_ok=True)
+    old_session = os.path.join(
+        sdir, "2026-01-01T00-00-00Z_bot1_mode-room.jsonl")
+    with open(old_session, "w") as f:
+        f.write('{"type":"session","version":3}\n')
+
     s, body = signed_webhook("bot1", new_payload("!mode finance",
                                                  room_token="mdm00001",
                                                  room_name="Mode Room"))
     meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
                                        "mode-room", ".room.json")))
     p = _posts("mdm00001")
-    check("!mode finance: confirmed, persisted, start prompt posted",
+    check("!mode finance: confirmed, persisted, fresh session started",
           s == 200 and body.get("handled") == "!mode"
-          and "Mode: finance" in p[-1] and "country" in p[-1]
+          and "Mode: finance" in p[-1] and "fresh pi session" in p[-1]
+          and not os.path.exists(old_session)
           and meta.get("mode") == "finance",
           str((body, meta, p[-1]))[:300])
 
-    # the persona text reaches pi via --append-system-prompt
-    ws = os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room")
-    from pigeon.pi import pi_command
+    s, body = signed_webhook("bot1", new_payload("!mode finance",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    check("!mode finance again: already active, no switch",
+          body.get("handled") == "!mode"
+          and "already active" in _posts("mdm00001")[-1],
+          str(_posts("mdm00001")[-1])[:200])
+
+    # the persona text AND the start-prompt instruction reach pi via
+    # --append-system-prompt (pi asks its setup questions itself)
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "finance")
-    check("pi_command: finance mode appends the persona",
-          "--append-system-prompt" in cmd and "finance assistant"
-          in " ".join(cmd), " ".join(cmd[:20]))
+    check("pi_command: finance appends persona + start prompt",
+          cmd.count("--append-system-prompt") == 2
+          and "finance assistant" in " ".join(cmd)
+          and "FIRST reply" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "trader")
-    check("pi_command: trader mode appends the persona",
-          "--append-system-prompt" in cmd and "trading assistant"
-          in " ".join(cmd), " ".join(cmd[:20]))
+    check("pi_command: trader mode appends the persona (no start prompt)",
+          cmd.count("--append-system-prompt") == 1
+          and "trading assistant" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "office")
-    check("pi_command: office mode appends the office persona",
-          "--append-system-prompt" in cmd and "office assistant"
-          in " ".join(cmd), " ".join(cmd[:20]))
+    check("pi_command: office mode appends the office persona "
+          "(no start prompt)",
+          cmd.count("--append-system-prompt") == 1
+          and "office assistant" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "programmer")
     check("pi_command: programmer mode injects nothing (native prompt)",
@@ -386,10 +410,9 @@ def run():
     check("!memory: shows the memory entries",
           s == 200 and "freelancer in Austria" in p[-1], str(p)[-300:])
 
-    # !clean wipes the session + workspace, but memory.md survives (mode
-    # is finance -> the start prompt is posted again on the fresh session).
-    # Fake-pi writes no real session files, so fabricate one like 4b2.
-    from pigeon.pi import session_dir
+    # !clean wipes the session + workspace, but memory.md survives;
+    # the start prompt is NOT re-posted — it rides in pi's system
+    # prompt on the next fresh run.
     sdir = session_dir(os.path.join(ws, "workspace"))
     os.makedirs(sdir, exist_ok=True)
     with open(os.path.join(
@@ -402,10 +425,10 @@ def run():
                                                  room_name="Mode Room"))
     p = _posts("mdm00001")
     mem = os.path.join(ws, "workspace", "memory.md")
-    check("!clean: memory survives, finance start prompt posted again",
+    check("!clean: memory survives, no start prompt posted",
           s == 200 and body.get("handled") == "!clean"
           and "pi session cleared" in p[-1]
-          and os.path.isfile(mem) and "country" in p[-1]
+          and os.path.isfile(mem) and "country" not in p[-1]
           and not os.path.exists(os.path.join(ws, "workspace",
                                               "leftover.txt")),
           str((body, p[-1]))[:300])

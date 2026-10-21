@@ -381,8 +381,9 @@ def mode_text(mode):
 
 
 def mode_start_prompt(mode):
-    """The mode's start-prompt text (pigeon posts it on mode entry and
-    after !clean), or None."""
+    """The mode's start-prompt text — an instruction appended to pi's
+    system prompt telling it to ask for its setup details (country,
+    language, ...) in the first reply of a fresh session — or None."""
     if not mode or not MODE_NAME_RE.fullmatch(mode):
         return None
     path = os.path.join(MODES_DIR, mode + START_PROMPT_SUFFIX + ".md")
@@ -395,8 +396,9 @@ def mode_start_prompt(mode):
 def handle_mode_command(message, cwd):
     """Handle !mode [name]: show or switch the room's persona. Returns
     the reply to post, or None when the message is not a !mode command.
-    'default' is an alias for DEFAULT_MODE; entering a mode that has a
-    start prompt posts it (the persona asks for its setup context)."""
+    'default' is an alias for DEFAULT_MODE. Switching personas starts a
+    fresh pi session (wipes the room's sessions, keeps the workspace) so
+    that a mode's start prompt takes effect on the next message."""
     m = MODE_CMD_RE.match(message or "")
     if not m:
         return None
@@ -414,14 +416,19 @@ def handle_mode_command(message, cwd):
         return ("modes:\n" + "\n".join(lines) +
                 "\nthis room uses: {}".format(cur))
     if arg in names:
+        cur = room_mode(cwd)
+        if arg == cur:
+            return "Mode: {} \u2014 already active.".format(cur)
+        from .pi import wipe_sessions  # local import: pi depends on room
+        removed = wipe_sessions(os.path.join(cwd, "workspace"))
         set_room_mode(cwd, arg)
-        reply = ("Mode: {} \u2014 pi's native programmer prompt."
-                 .format(PROGRAMMER_MODE) if arg == PROGRAMMER_MODE else
+        fresh = (" (fresh pi session: removed {} session file(s))"
+                 .format(removed) if removed else "")
+        reply = ("Mode: {} \u2014 pi's native programmer prompt.{}"
+                 .format(PROGRAMMER_MODE, fresh)
+                 if arg == PROGRAMMER_MODE else
                  "Mode: {} \u2014 the persona applies from the next "
-                 "message.".format(arg))
-        start = mode_start_prompt(arg)
-        if start:
-            reply += "\n\n" + start
+                 "message.{}".format(arg, fresh))
         return reply
     return ("Unknown mode \u2018{}\u2019. Available: {}".format(
         arg, ", ".join(names)))

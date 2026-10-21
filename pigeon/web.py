@@ -25,8 +25,8 @@ from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    resolve_room_folder, handle_bot_added, handle_bot_removed,
                    handle_mention_command, handle_memory_command,
                    handle_mode_command, handle_pw_command,
-                   handle_thinking_command, mode_start_prompt, room_creds,
-                   room_dir, room_meta_read, room_mode, strip_mention,
+                   handle_thinking_command, room_creds,
+                   room_dir, room_meta_read, strip_mention,
                    write_room_token)
 from .security import verify_webhook_signature
 
@@ -187,11 +187,6 @@ def webhook(bot):
     # files behind
     if message in ("!clean", "!c"):
         reply = clean_session_and_workspace(cwd)
-        # a fresh session is a fresh start for start-prompt personas
-        # (e.g. finance asks again which country applies)
-        start = mode_start_prompt(room_mode(cwd))
-        if start and "nothing to clear" not in reply:
-            reply += "\n\n" + start
         post_message(room, reply)
         return jsonify({"handled": "!clean"}), 200
 

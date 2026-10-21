@@ -131,13 +131,17 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   removes; `!schedule list` / `!schedule rm <id>` (alias `!sch …`) show
   or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
-  mention is stripped); `!mode [name]` switches the room's persona —
-  `programmer` (pi's native prompt), `office` (default for all rooms),
-  `finance` (invoicing/payroll/accounting; posts a start prompt
-  asking which country's laws apply — also re-posted after `!clean`)
-  or `trader` (stock & crypto market analysis; live data only, risk
-  first, never quotes prices from memory), all from the .md personas in `pigeon/modes/` appended to pi's system
-  prompt; `!memory` shows the room's long-term memory
+  mention is stripped); `!mode [name]` switches the room's persona (a switch starts a fresh pi
+  session): `programmer` (pi's native prompt), `office` (default for all
+  rooms), `finance` (invoicing/payroll/accounting — never assumes a
+  business setup; its start prompt makes pi ask country + language in
+  the first reply of a fresh session) or `trader` (stock & crypto market
+  analysis; live data only, risk first, never quotes prices from memory),
+  all from the .md personas in `pigeon/modes/` appended to pi's system
+  prompt. A mode's `<name>_start_prompt.md` is an instruction appended
+  to pi's system prompt so **pi itself generates** the setup questions
+  (on mode switch and after `!clean`) rather than pigeon posting a
+  static message; `!memory` shows the room's long-term memory
   (`workspace/memory.md`, maintained by the memory skill, survives
   `!clean`); `!help` (or `!h`) lists all
   commands and `!version` (or `!v`) shows the running build.
@@ -325,7 +329,7 @@ pigeon/
   room.py         room folders, .room.json (token + app password +
                   mention gate + persona mode), folder disambiguation,
                   !pw, !clean, !thinking (last-thinking.md), join/leave
-  modes/          persona prompts appended to pi's system prompt (!mode)
+  modes/          persona prompts + start-prompt instructions appended to pi's system prompt (!mode)
   nextcloud.py    bot API posting, reactions, WebDAV/CalDAV client
   pi.py           pi config check, bubblewrap sandbox, JSONL run,
                   --append-system-prompt persona injection
