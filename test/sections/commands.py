@@ -325,7 +325,7 @@ def run():
     check("!mode (bare): lists modes, marks the default, shows current",
           s == 200 and body.get("handled") == "!mode" and p
           and "programmer" in p[-1] and "office (default)" in p[-1]
-          and "finance" in p[-1] and "this room uses: office" in p[-1]
+          and "finance" in p[-1] and "trader" in p[-1] and "this room uses: office" in p[-1]
           and "start_prompt" not in p[-1],
           str(p)[-400:])
 
@@ -348,6 +348,11 @@ def run():
                      "finance")
     check("pi_command: finance mode appends the persona",
           "--append-system-prompt" in cmd and "finance assistant"
+          in " ".join(cmd), " ".join(cmd[:20]))
+    cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
+                     "trader")
+    check("pi_command: trader mode appends the persona",
+          "--append-system-prompt" in cmd and "trading assistant"
           in " ".join(cmd), " ".join(cmd[:20]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "office")

@@ -132,10 +132,11 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!mode [name]` switches the room's persona —
-  `programmer` (pi's native prompt), `office` (default for all rooms)
-  or `finance` (invoicing/payroll/accounting; posts a start prompt
-  asking which country's laws apply — also re-posted after `!clean`),
-  all from the .md personas in `pigeon/modes/` appended to pi's system
+  `programmer` (pi's native prompt), `office` (default for all rooms),
+  `finance` (invoicing/payroll/accounting; posts a start prompt
+  asking which country's laws apply — also re-posted after `!clean`)
+  or `trader` (stock & crypto market analysis; live data only, risk
+  first, never quotes prices from memory), all from the .md personas in `pigeon/modes/` appended to pi's system
   prompt; `!memory` shows the room's long-term memory
   (`workspace/memory.md`, maintained by the memory skill, survives
   `!clean`); `!help` (or `!h`) lists all
