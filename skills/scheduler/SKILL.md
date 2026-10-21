@@ -54,6 +54,7 @@ with the interval + window the user asked for.
   `at-news — daily at 09:00 (Europe/Vienna): Send the top Austrian news.`
   If the file is missing or empty: "No scheduled tasks."
 * To change a task, edit its entry (keep the `id`); to delete, remove the
-  entry. After any change, confirm in the room what is now scheduled.
+  entry. After any change, confirm what is scheduled; `!schedule
+  run <id>` tests an entry without changing its schedule.
 * Schedules keep working across restarts; the fired run happens in this
   room's pi session, so it sees the conversation context.

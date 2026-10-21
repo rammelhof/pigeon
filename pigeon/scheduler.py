@@ -254,9 +254,9 @@ def advance_next_run(entry, now):
 
 
 # ------------------------------------------------------- !schedule cmd ----
-# Room commands (handled in web.py): list this room's schedules or remove
-# one by id. Creating and editing entries is left to pi (see the
-# scheduler skill).
+# Room commands (handled in web.py): list this room's schedules, run one
+# by id right now (for testing) or remove one. Creating and editing
+# entries is left to pi (see the scheduler skill).
 
 WD_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -335,24 +335,59 @@ SCHEDULE_CMD_RE = re.compile(r"^(?:!schedule|!sch)(?:\s+(.*?))?\s*$")
 SCHEDULE_HELP = (
     "Scheduled tasks \u2014 usage:\n"
     "* `!schedule list` \u2014 show all entries and their next runs\n"
+    "* `!schedule run <id>` \u2014 run it once, right now (testing); "
+    "the schedule itself is not changed\n"
     "* `!schedule rm <id>` \u2014 drop one (the id is shown by `list`)\n"
     "Alias: `!sch \u2026`. New tasks are added by the agent to\n"
     "workspace/schedules.json \u2014 just ask, e.g. “remind me daily at"
     " 08:00 to …”.")
 
 
-def handle_schedule_command(message, cwd):
+def _run_entry_now(cwd, bot, sid):
+    """`!schedule run <id>` — execute the entry's prompt right now
+    (e.g. to test it). The entry's next_run and the rest of the
+    schedule are left untouched."""
+    if not sid:
+        return "Usage: !schedule run <id> (see !schedule list)."
+    _, entries = _load_schedules(cwd)
+    entry = next((e for e in entries if e.get("id") == sid), None)
+    if entry is None:
+        return f"No scheduled task with id “{sid}” in this room."
+    prompt = (entry.get("prompt") or "").strip()
+    if not prompt:
+        return f"Task “{sid}” has no prompt to run."
+    folder = os.path.basename(cwd)
+    if not bot:  # BOTS_DIR layout: <bots>/<bot>/rooms/<folder>
+        bot = os.path.basename(os.path.dirname(os.path.dirname(
+            os.path.abspath(cwd))))
+    token = room_token(cwd)
+    if not token:
+        return ("The task exists, but this room has no bot token yet "
+                "— I cannot send it a message.")
+    enqueue(f"{bot}/{folder}", bot, {
+        "room": token, "room_id": folder, "message": prompt,
+        "sender": "scheduler", "cwd": cwd,
+        "workspace": os.path.join(cwd, "workspace"),
+    })
+    log.info("scheduler: %s: entry %r run now via !schedule run",
+             folder, sid)
+    return (f"Running task “{sid}” now — the schedule itself "
+            "is not changed.")
+
+
+def handle_schedule_command(message, cwd, bot=None):
     """Handle !schedule (or !sch) for this room. Returns the reply to
     post, or None when the message is not a !schedule command.
 
     Bare `!schedule` (or an unknown subcommand) answers with a short
-    usage hint; `list` shows the entries; `rm <id>` drops one."""
+    usage hint; `list` shows the entries; `run <id>` executes one right
+    now (testing, schedule untouched); `rm <id>` drops one."""
     m = SCHEDULE_CMD_RE.match(message or "")
     if not m:
         return None
     parts = (m.group(1) or "").split()
     cmd = parts[0] if parts else ""
-    if cmd not in ("list", "rm"):
+    if cmd not in ("list", "rm", "run"):
         return SCHEDULE_HELP
     sid = parts[1] if len(parts) > 1 else ""
     data, entries = _load_schedules(cwd)
@@ -363,6 +398,9 @@ def handle_schedule_command(message, cwd):
                     "me what to run and when.")
         return ("Scheduled tasks:\n" +
                 "\n".join(_fmt_entry(e) for e in entries))
+
+    if cmd == "run":
+        return _run_entry_now(cwd, bot, sid)
 
     # rm <id>
     if not sid or data is None:

@@ -197,8 +197,8 @@ def webhook(bot):
         post_message(room, reply)
         return jsonify({"handled": "!thinking"}), 200
 
-    # room commands: !stop (or !s), !schedule list|rm, !mention, !help
-    # (or !h), !version (or !v) — none of these ever reach pi
+    # room commands: !stop (or !s), !schedule list|run|rm, !mention,
+    # !help (or !h), !version (or !v) — none of these ever reach pi
     if message in ("!stop", "!s"):
         stopped = tasks.stop_running(cwd)
         post_message(room,
@@ -207,7 +207,7 @@ def webhook(bot):
                      "Nothing is running in this room right now.")
         return jsonify({"handled": "!stop"}), 200
 
-    reply = scheduler.handle_schedule_command(message, cwd)
+    reply = scheduler.handle_schedule_command(message, cwd, bot)
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "!schedule"}), 200

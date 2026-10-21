@@ -128,8 +128,10 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * **More room commands** (all intercepted by pigeon, never reach pi):
   `!stop` (or `!s`) kills the running pi in this room and ends quietly
   — it also removes the robot reaction, the only reaction pigeon ever
-  removes; `!schedule list` / `!schedule rm <id>` (alias `!sch …`) show
-  or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
+  removes; `!schedule list` / `!schedule run <id>` / `!schedule rm <id>`
+  (alias `!sch …`) show, run once right now (testing — the schedule is
+  not changed) or drop scheduled tasks (the list includes the next run
+  per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!mode [name]` switches the room's persona (a switch starts a fresh pi
   session) — all from the .md personas in `pigeon/modes/` appended to

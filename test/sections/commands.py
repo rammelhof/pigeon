@@ -1,5 +1,5 @@
 """Section 4c: room commands — !help (+ !h), !version (+ !v),
-!schedule list|rm, !stop (+ !s, kills the running pi, reaction
+!schedule list|run|rm, !stop (+ !s, kills the running pi, reaction
 removed), the burst reaction rule (only the LAST message of a batch is
 reacted), !mention gating (on / off / status; only @<bot name> or
 @bot trigger, mention stripped before pi), !mode personas (+ !memory)
@@ -126,6 +126,37 @@ def run():
     check("!schedule rm: unknown id reported",
           any("No scheduled task with id" in m for m in posted),
           str(posted)[:200])
+
+    # !schedule run <id> — fire the entry right now (testing), leaving
+    # the schedule itself untouched
+    s, body = signed_webhook("bot1", new_payload(
+        "!sch run at-news", room_token="sch00001",
+        room_name="Sched Room"))
+    check("!schedule run: handled",
+          s == 200 and body.get("handled") == "!schedule", str(body))
+    posted = _posts("sch00001")
+    check("!schedule run: confirmation posted",
+          any("Running task" in m and "at-news" in m for m in posted),
+          str(posted)[-200:])
+    done = wait_room_done("bot1/rooms/sched-room", min_count=1)
+    check("!schedule run: prompt was sent to pi",
+          done is not None and done["status"] == "done", str(done))
+    posted = _posts("sch00001")
+    check("!schedule run: pi reply posted to the room",
+          any("hello from fake pi" in m for m in posted),
+          str(posted)[-200:])
+    data = json.load(open(os.path.join(ws, "schedules.json")))
+    entry = next(e for e in data["schedules"] if e["id"] == "at-news")
+    check("!schedule run: next_run untouched",
+          entry["next_run"] == far + 1, str(entry))
+
+    s, body = signed_webhook("bot1", new_payload(
+        "!schedule run no-such-id", room_token="sch00001",
+        room_name="Sched Room"))
+    posted = _posts("sch00001")
+    check("!schedule run: unknown id reported",
+          any("No scheduled task with id" in m and "no-such-id" in m
+              for m in posted), str(posted)[-200:])
 
     # 4c2b. bare !schedule -> short usage; !sch alias works
     s, body = signed_webhook("bot1", new_payload("!schedule",
