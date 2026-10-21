@@ -401,6 +401,7 @@ def snapshot():
                 "age_seconds": round(time.time() - t["created_at"], 1),
                 "process_alive": bool(t["proc"] and t["proc"].poll() is None),
                 "error": t["error"],
+                "message": (t.get("message") or "")[:80],
             }
             for t in _tasks.values()
         ]

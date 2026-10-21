@@ -143,7 +143,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   (on mode switch and after `!clean`) rather than pigeon posting a
   static message; `!memory` shows the room's long-term memory
   (`workspace/memory.md`, maintained by the memory skill, survives
-  `!clean`); `!help` (or `!h`) lists all
+  `!clean`); `!status` shows whether pi is running right now (for how
+  long, on what message); `!help` (or `!h`) lists all
   commands and `!version` (or `!v`) shows the running build.
   When several messages arrive within the batch window they are merged
   into one pi run and only the **last** message is reacted — one

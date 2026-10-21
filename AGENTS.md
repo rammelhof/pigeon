@@ -40,7 +40,7 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
    may only depend on `config` and layers below it (e.g. `room.py` may not
    import `pi` or `nextcloud` at module level — use local imports).
 4. **Room commands use the `!` prefix** (`!clean`, `!thinking`, `!stop`,
-   `!schedule`/`!sch`, `!mention`/`!m`, `!mode`, `!memory`, `!pw`,
+   `!schedule`/`!sch`, `!mention`/`!m`, `!mode`, `!status`, `!memory`, `!pw`,
    `!help`/`!h`, `!version`/`!v`). Keep the short aliases working.
 5. **Tests**: add a check to the matching `test/sections/` module; the check
    helper prints PASS/FAIL and collects failures. New section? Append it to

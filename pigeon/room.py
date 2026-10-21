@@ -458,6 +458,28 @@ def handle_memory_command(message, cwd):
                 "(it survives !clean).")
     return "my memory for this room (survives !clean):\n" + text
 
+
+def handle_status_command(message, cwd):
+    """Handle !status: report whether pi is currently running in this
+    room (for how long, on what message) or not. Returns the reply to
+    post, or None when the message is not !status."""
+    if (message or "").strip() != "!status":
+        return None
+    from .tasks import snapshot  # local import: tasks depends on room
+    tasks_list, _, _ = snapshot()
+    running = [t for t in tasks_list
+               if t["room_cwd"] == cwd and t["status"] == "running"]
+    mode = room_mode(cwd)
+    if not running:
+        return "pi is not running in this room (mode: {}).".format(mode)
+    t = running[-1]
+    words = " ".join((t.get("message") or "").split())
+    preview = words[:40] + ("\u2026" if len(words) > 40 else "")
+    return ("pi is running ({}s, retry {}) \u2014 \u201c{}\u201d "
+            "(mode: {})".format(t["age_seconds"], t["retries"], preview,
+                                mode))
+
+
 # ------------------------------------------------------- bot lifecycle ----
 # Talk sends dedicated ActivityPub events when this bot is added to or
 # removed from a room (BotController enable/disable -> Join / Leave
@@ -482,7 +504,8 @@ HELP_TEXT = (
     "  !mention on|off|status (or !m \u2026) \u2014 only react when "
     "    mentioned ({mention}); bare !mention / !m shows usage\n"
     "  !mode [name] \u2014 switch persona (default = office assistant, "
-    "office, finance, programmer); bare !mode lists the modes\n"
+    "office, finance, trader, programmer); bare !mode lists the modes\n"
+    "  !status \u2014 show whether pi is running right now\n"
     "  !memory \u2014 show my long-term memory for this room "
     "(survives !clean)\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"

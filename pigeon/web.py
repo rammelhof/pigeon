@@ -25,6 +25,7 @@ from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    resolve_room_folder, handle_bot_added, handle_bot_removed,
                    handle_mention_command, handle_memory_command,
                    handle_mode_command, handle_pw_command,
+                   handle_status_command,
                    handle_thinking_command, room_creds,
                    room_dir, room_meta_read, strip_mention,
                    write_room_token)
@@ -220,6 +221,11 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "!mode"}), 200
+
+    reply = handle_status_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "!status"}), 200
 
     reply = handle_memory_command(message, cwd)
     if reply is not None:

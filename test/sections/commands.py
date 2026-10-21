@@ -1,8 +1,9 @@
 """Section 4c: room commands — !help (+ !h), !version (+ !v),
 !schedule list|rm, !stop (+ !s, kills the running pi, reaction
 removed), the burst reaction rule (only the LAST message of a batch is
-reacted) and !mention gating (on / off / status; only @<bot name> or
-@bot trigger, mention stripped before pi)."""
+reacted), !mention gating (on / off / status; only @<bot name> or
+@bot trigger, mention stripped before pi), !mode personas (+ !memory)
+and !status (is pi running right now?)."""
 import json
 import os
 import time
@@ -477,3 +478,41 @@ def run():
     done = wait_room_done("bot1/rooms/mode-room", min_count=1)
     check("!mode default: office-mode run finished",
           done is not None and done["status"] == "done", str(done))
+
+    # 4c7. !status: reports whether pi is running right now
+    s, body = signed_webhook("bot1", new_payload("!status",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!status: handled, not queued",
+          s == 200 and body.get("handled") == "!status", str(body))
+    check("!status: idle room says not running",
+          "not running" in p[-1] and "mode: office" in p[-1],
+          str(p[-1])[:200])
+
+    # a running pi in this room is reported — fake-pi exits too fast for
+    # a live in-flight check, so unit-test with an injected task
+    from pigeon import tasks as tasks_mod
+    from pigeon.room import handle_status_command
+    room_cwd = os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room")
+    tasks_mod._tasks["status-test"] = {
+        "id": "status-test", "bot": "bot1", "cwd": room_cwd,
+        "status": "running", "retries": 1,
+        "created_at": time.time() - 1.3, "message": "what is my status",
+        "error": None, "proc": None,
+    }
+    reply = handle_status_command("!status", room_cwd)
+    del tasks_mod._tasks["status-test"]
+    check("!status: reports the running pi",
+          reply is not None and "pi is running" in reply
+          and "retry 1" in reply and "what is my status" in reply,
+          str(reply))
+
+    # ...and !status is not treated as a prompt
+    s, body = signed_webhook("bot1", new_payload("!status",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!status: idle room says not running (again)",
+          body.get("handled") == "!status" and "not running" in p[-1],
+          str(p[-1])[:200])
