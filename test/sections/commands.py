@@ -424,6 +424,15 @@ def run():
                      "programmer")
     check("pi_command: programmer mode injects nothing (native prompt)",
           "--append-system-prompt" not in cmd, " ".join(cmd[:20]))
+    check("pi_command: prompt is always last, after -- (a prompt "
+          "starting with '-' would otherwise be parsed as an unknown "
+          "flag)",
+          cmd[-2] == "--" and cmd[-1] == "hi", " ".join(cmd[-4:]))
+    cmd = pi_command("- a dash-first prompt", "bot1_mode-room", ws, "bot1",
+                     "mdm00001", "programmer")
+    check("pi_command: dash-first prompt survives as the last argument",
+          cmd[-2] == "--" and cmd[-1] == "- a dash-first prompt",
+          " ".join(cmd[-3:]))
 
     # !memory: empty at first
     s, body = signed_webhook("bot1", new_payload("!memory",

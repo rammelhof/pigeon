@@ -39,7 +39,9 @@ def pi_command(prompt, session_id, cwd, bot, room, mode=""):
     start = mode_start_prompt(mode)
     if start:
         pi += ["--append-system-prompt", start]
-    pi.append(prompt)
+    # "--" stops pi's option parsing: without it a prompt that starts
+    # with "-" (e.g. a bullet list) is rejected as an unknown flag
+    pi += ["--", prompt]
     ws = os.path.join(cwd, "workspace")
     if not SANDBOX:
         return pi

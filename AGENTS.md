@@ -59,6 +59,9 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
 - Pi sessions live at `$PI_CODING_AGENT_DIR/sessions/--<workspace-dashes>--/`.
 - Talk bot API can only **post** messages, never edit; the indicator is a
   single robot reaction, add-only (removed only by `!stop`).
+- Pi's CLI parses positional arguments that start with `-` as unknown
+  flags — `pi_command` in `pi.py` therefore always puts the prompt after
+  a `--` separator. Keep it that way.
 - Thinking is saved to `<room>/last-thinking.md`, never auto-posted.
 - Gunicorn runs without an access log (error log to console only);
   app-level `@logged` decorator covers request logging.
