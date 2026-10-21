@@ -76,7 +76,6 @@ def parse_payload(payload):
       bot_name:  Talk's bot name (joined/left only)
       message:   chat text (message only)
       sender:    sender display name (message only)
-      message_id: Talk message id (message only; used for reactions)
     or None when the event is not one we handle.
     Regular chat:  {type: Create, object: Note, target: Collection}
     Bot join/leave: {type: Join|Leave, object: Collection} (no Note and
@@ -113,7 +112,6 @@ def parse_payload(payload):
                 "room_name": (target.get("name") or "").strip(),
                 "bot_name": "",
                 "message": message,
-                "message_id": str(obj.get("id") or ""),
                 "sender": (actor.get("name") or "").strip() or "user"}
     return None
 
@@ -168,8 +166,7 @@ def webhook(bot):
     # text at all: transcribe it, post the text back and hand the text to pi
     f = payload_file_param(payload)
     if f is not None and stt.is_voice_file(f):
-        return handle_voice_message(bot, folder, room, f, cwd, sender,
-                                    parsed["message_id"])
+        return handle_voice_message(bot, folder, room, f, cwd, sender)
 
     if not message:
         return jsonify({"ignored": "empty message"}), 200
@@ -271,8 +268,7 @@ def webhook(bot):
                                         "[file: no file data in payload]"))
 
     key = f"{bot}/{folder}"
-    ind = (indicator.Indicator(room, parsed["message_id"])
-           if parsed["message_id"] else None)
+    ind = indicator.Indicator(room)
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,
@@ -287,7 +283,7 @@ def webhook(bot):
     return jsonify({"queued": True, "bot": bot, "room_folder": folder}), 202
 
 
-def handle_voice_message(bot, folder, room, f, cwd, sender, message_id=""):
+def handle_voice_message(bot, folder, room, f, cwd, sender):
     """Voice message (audio/wav, audio/mpeg): download the file, transcribe
     it with the configured STT endpoint (.pigeon.json in the bots folder),
     post the extracted text back to the room and queue that text for pi.
@@ -333,8 +329,7 @@ def handle_voice_message(bot, folder, room, f, cwd, sender, message_id=""):
 
     post_message(room, "\U0001f442 " + text)
     key = f"{bot}/{folder}"
-    ind = (indicator.Indicator(room, message_id)
-           if message_id else None)
+    ind = indicator.Indicator(room)
     tasks.enqueue(key, bot, {
         "room": room,
         "room_id": folder,

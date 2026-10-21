@@ -1,88 +1,48 @@
-"""Live progress indicator: a bot reaction on the user's chat message.
-Event-driven, add-only:
+"""Live progress indicator: a short SILENT chat message that tells the
+room the bot heard the message and pi is working on it.
 
-    pi agent started           -> robot (and then it stays)
+One emoji pair — robot + ear (🤖 👂) — posted through the bot API with
+the ``silent`` flag, so it reaches the chat without triggering a
+notification. Posted once when pi (re)starts for a job; it is never
+removed or edited. (Reactions were used before, but every reaction
+change reaches the room as a notification.)
 
-Nothing else: no reaction when the webhook receives the message,
-nothing while pi thinks, nothing when the run finishes. Reactions are
-only ever set, never removed — any reaction change reaches the room
-as a notification — with one exception: !stop removes the robot
-reaction, because the user explicitly ended the run.
-
-The Talk API call happens in one small thread fed by a queue, so the
-worker never blocks on HTTP. Any API error (e.g. an older Talk without
-the bot reaction endpoints) disables the indicator for good — the run
-itself is never affected.
+The Talk API call happens in a small thread so the worker never blocks
+on HTTP; any API error is logged and dropped — the run itself is never
+affected.
 """
 
-import queue
 import threading
 
 from .config import log
-from .nextcloud import react, unreact
+from .nextcloud import post_message
 
-EMOJI_STARTED = "\U0001f916"  # 🤖 pi agent started
-_CLEAR = object()  # queue command: remove the last reaction (only !stop)
+# robot + ear: "the bot heard it and is working on it"
+ACK = "\U0001f916 \U0001f442"
 
 
 class Indicator:
-    """One per incoming chat message. Feed it events from any thread;
-    the Talk API call is applied in order by the indicator thread."""
+    """One per incoming chat message. Fire ``started()`` from any
+    thread (including per retry); the ack is posted at most once,
+    asynchronously."""
 
-    def __init__(self, room, message_id):
+    def __init__(self, room):
         self._room = room
-        self._mid = str(message_id)
-        self._q = queue.Queue()
-        t = threading.Thread(target=self._run, daemon=True,
-                             name=f"indicator-{self._mid}")
-        self._thread = t
-        t.start()
-
-    # -- events (safe from any thread) ---------------------------------
+        self._fired = False
 
     def started(self):
-        """pi (re)started for this job — also used before a retry."""
-        self._post(EMOJI_STARTED)
+        """pi started (or was restarted for a retry)."""
+        if self._fired:
+            return
+        self._fired = True
+        threading.Thread(target=self._post, daemon=True,
+                         name="indicator").start()
 
     def stop(self):
-        """Shut the thread down. Idempotent. The reaction is KEPT —
-        removing it would send a notification into the room."""
-        self._q.put(None)
-        self._thread.join(timeout=5)
+        """Shut down. Idempotent no-op: the ack stays in the chat."""
 
-    def clear(self):
-        """Remove the last reaction — only used by !stop: the user
-        explicitly ended the run, so the robot reaction is misleading.
-        Without the API it simply fails silently."""
-        self._q.put(_CLEAR)
-
-    # -- the thread ------------------------------------------------------
-
-    def _post(self, emoji):
-        self._q.put(emoji)
-
-    def _run(self):
-        last = None
-        while True:
-            item = self._q.get()
-            if item is None:
-                break
-            if item is _CLEAR:
-                if last:
-                    try:
-                        unreact(self._room, self._mid, last)
-                    except Exception as e:
-                        log.debug("indicator %s unreact failed: %s",
-                                  self._mid, e)
-                continue
-            if item == last:
-                continue
-            try:
-                # add-only: Talk keeps one row per (actor, message,
-                # emoji), so no replacement, no removal, no extra
-                # notifications.
-                react(self._room, self._mid, item)
-                last = item
-            except Exception as e:
-                log.debug("indicator %s stopped: %s", self._mid, e)
-                return
+    def _post(self):
+        try:
+            post_message(self._room, ACK, silent=True)
+        except Exception as e:
+            log.debug("indicator ack could not be posted: %s", e)

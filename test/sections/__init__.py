@@ -9,9 +9,9 @@ SECTIONS = [
     "message",    # webhook -> task done, bubblewrap sandbox
     "room",       # !pw, !clean, bot Join/Leave
     "commands",   # !help, !version, !stop, !mention, !schedule, burst
-                  #     reaction rule
+                  #     ack rule
     "files",      # file messages (no pw, by id, text event, bad credentials)
-    "thinking",   # live thinking bubble (chat web API)
+    "thinking",   # silent progress ack, thinking never posted
     "voice",      # STT transcription (wav + mp3)
     "ncproxy",    # /nc proxy: files + calendar, token auth
     "pipeline",   # ignored events, retry, batch window, heartbeat kill

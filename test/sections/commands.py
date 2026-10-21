@@ -1,7 +1,7 @@
 """Section 4c: room commands — !help (+ !h), !version (+ !v),
-!schedule list|run|rm, !stop (+ !s, kills the running pi, reaction
-removed), the burst reaction rule (only the LAST message of a batch is
-reacted), !mention gating (on / off / status; only @<bot name> or
+!schedule list|run|rm, !stop (+ !s, kills the running pi), the burst
+ack rule (only the LAST message of a batch gets the silent ack),
+!mention gating (on / off / status; only @<bot name> or
 @bot trigger, mention stripped before pi), !mode personas (+ !memory)
 and !status (is pi running right now?)."""
 import json
@@ -11,15 +11,7 @@ import time
 import nc_stub
 from harness import (BOTS_TEST, check, join_leave_payload, new_payload,
                      signed_webhook, tasks, wait_prompt, wait_room_done)
-
-E_START = "\U0001f916"     # 🤖 pi started (kept afterwards)
-
-
-def _reactions_since(before):
-    """(message_id, emoji, action) triples added to the stub's log
-    (the stub records (room, message_id, emoji, action))."""
-    return [(r[1], r[2], r[3])
-            for r in nc_stub.H.bot_reactions[before:]]
+from pigeon.indicator import ACK
 
 
 def _wait_running(cwd, timeout=2):
@@ -176,9 +168,9 @@ def run():
           and any("- `at-news`:" in m for m in _posts("sch00001")),
           str(_posts("sch00001"))[-200:])
 
-    # 4c3. /stop (+ /s): kills the running pi, ends quietly, removes the
-    # robot reaction — the only reaction removal pigeon ever does
-    rea_before = len(nc_stub.H.bot_reactions)
+    # 4c3. /stop (+ /s): kills the running pi and ends quietly — the
+    # silent ack posted on start stays in the history (nothing to
+    # remove), no failure notice is posted
     s, body = signed_webhook("bot1", new_payload("hang the pipeline",
                                                  room_token="stp00001",
                                                  room_name="Stop Room"))
@@ -195,20 +187,10 @@ def run():
     check("!stop: task ended as stopped",
           done is not None and done["status"] == "stopped", str(done))
     posted = _posts("stp00001")
-    check("!stop: exactly one reply, no failure notice",
-          len(posted) == 1 and "stopped" in posted[0]
-          and "failed" not in posted[0], str(posted)[:200])
-    # the indicator thread is async by design — poll briefly for the
-    # removal to land
-    reacts = _reactions_since(rea_before)
-    for _ in range(20):
-        if reacts == [("999", E_START, "add"), ("999", E_START, "remove")]:
-            break
-        time.sleep(0.3)
-        reacts = _reactions_since(rea_before)
-    check("!stop: robot reacted on start, then was removed",
-          reacts == [("999", E_START, "add"), ("999", E_START, "remove")],
-          str(reacts))
+    check("!stop: only the ack and the stopped-reply, no failure notice",
+          len(posted) == 2 and posted[0] == ACK
+          and "stopped" in posted[1] and "failed" not in posted[1],
+          str(posted)[:200])
 
     # /stop when nothing is running: friendly note, no task
     s, body = signed_webhook("bot1", new_payload("!stop",
@@ -220,9 +202,8 @@ def run():
     check("!stop idle: says nothing is running",
           posted and "Nothing is running" in posted[-1], str(posted)[:200])
 
-    # 4c4. burst reaction rule: two messages within the batch window =
-    # one pi run, and only the LAST message is reacted
-    rea_before = len(nc_stub.H.bot_reactions)
+    # 4c4. burst ack rule: two messages within the batch window =
+    # one pi run, and only the LAST message gets the silent ack
     p1 = new_payload("part one of the burst", room_token="bst00001",
                      room_name="Burst Room")
     p1["object"]["id"] = "1001"
@@ -243,9 +224,9 @@ def run():
           prompt is not None and "part two of the burst" in prompt
           and prompt.index("part one") < prompt.index("part two"),
           str(prompt)[:200])
-    reacts = _reactions_since(rea_before)
-    check("burst: only the LAST message is reacted (one notification)",
-          reacts == [("1002", E_START, "add")], str(reacts))
+    bposts = _posts("bst00001")
+    check("burst: only the LAST message gets the ack (one, not two)",
+          sum(m == ACK for m in bposts) == 1, str(bposts))
 
     # 4c5. !mention gating: on -> only @<bot name> or @bot are handled
     # (mention stripped), status, off -> everything again. Commands

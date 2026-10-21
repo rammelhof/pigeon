@@ -42,15 +42,16 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
 * **Thinking, on request only**: when pi produced thinking, it is
   saved to `<room dir>/last-thinking.md` — it is never posted to the
   room on its own. Send `!thinking` (or `!t`) to get the last thinking
-  posted back as a `🤔` + `>`-quoted message; only the robot reaction
+  posted back as a `🤔` + `>`-quoted message; only the silent ack
   and the result reach the room otherwise.
-* **Progress reaction**: when pi starts, the bot reacts to the user's
-  message with 🤖 and then leaves it — no reaction on receive, none
-  while pi thinks, none when it finishes (any reaction change would
-  notify the room again). Batched bursts get a reaction on the **last**
-  message only. Needs only the bot API (no user credentials); if
-  Talk rejects the call (older versions) the indicator quietly stops
-  and the run is unaffected.
+* **Silent progress ack**: when pi starts, the bot posts one short
+  silent message (🤖 👂, the `silent` flag, Talk 17.1+) — the room
+  sees it, but gets no notification. It is posted once per run, never
+  edited or removed (reactions were used before, but every reaction
+  change notifies the room). Batched bursts get one ack for the
+  **last** message only. Needs only the bot API (no user
+  credentials); if the post fails (older Talk) the indicator quietly
+  dies and the run is unaffected.
 * **File attachments** (per-room, isolated): Talk sends files as a
   `{file}` placeholder; pigeon downloads by **file id** instead via
   WebDAV SEARCH (basicsearch on `oc:fileid`, Basic auth with the room's
@@ -127,8 +128,7 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   to post it back into the room as a quote.
 * **More room commands** (all intercepted by pigeon, never reach pi):
   `!stop` (or `!s`) kills the running pi in this room and ends quietly
-  — it also removes the robot reaction, the only reaction pigeon ever
-  removes; `!schedule list` / `!schedule run <id>` / `!schedule rm <id>`
+  (the silent ack posted on start just stays in the history); `!schedule list` / `!schedule run <id>` / `!schedule rm <id>`
   (alias `!sch …`) show, run once right now (testing — the schedule is
   not changed) or drop scheduled tasks (the list includes the next run
   per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
@@ -155,8 +155,8 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   long, on what message); `!help` (or `!h`) lists all
   commands and `!version` (or `!v`) shows the running build.
   When several messages arrive within the batch window they are merged
-  into one pi run and only the **last** message is reacted — one
-  notification per burst, not one per message.
+  into one pi run and only the **last** message gets the silent ack —
+  one message per burst, not one per message.
 * **Bot join & leave**: when the bot is added to a room, pigeon posts a
   one-time greeting; when it is removed (Talk sends a `Leave` webhook),
   pigeon wipes the room entirely — pi sessions, workspace, app password
@@ -339,11 +339,11 @@ pigeon/
                   mention gate + persona mode), folder disambiguation,
                   !pw, !clean, !thinking (last-thinking.md), join/leave
   modes/          persona prompts + start-prompt instructions appended to pi's system prompt (!mode)
-  nextcloud.py    bot API posting, reactions, WebDAV/CalDAV client
+  nextcloud.py    bot API posting, WebDAV/CalDAV client
   pi.py           pi config check, bubblewrap sandbox, JSONL run,
                   --append-system-prompt persona injection
   tasks.py        per-room queues + workers, retries, heartbeat, !stop
-  indicator.py    robot-reaction progress indicator (add-only)
+  indicator.py    silent progress-ack post when pi starts
   scheduler.py    schedules.json time math + tick + !schedule command
   skills.py       bundled skill sync into the pi home
   nc_proxy.py     /nc routes: token-gated Nextcloud proxy for pi

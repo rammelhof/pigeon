@@ -15,10 +15,10 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
 | `pigeon/config.py` | All config from env + `VERSION` / `COMMIT` |
 | `pigeon/security.py` | HMAC signature verification, room tokens |
 | `pigeon/room.py` | Per-room state (`.room.json`, session/workspace, lifecycle) |
-| `pigeon/nextcloud.py` | Talk bot API + WebDAV client (messages, reactions, files) |
+| `pigeon/nextcloud.py` | Talk bot API + WebDAV client (messages, files) |
 | `pigeon/pi.py` | pi subprocess management, bwrap sandbox, session wipe |
 | `pigeon/tasks.py` | Task queue, retry, `stop_running`, stats |
-| `pigeon/indicator.py` | Reaction indicator (single robot emoji, add-only) |
+| `pigeon/indicator.py` | Silent progress-ack post when pi starts (one per run) |
 | `pigeon/scheduler.py` | `workspace/schedules.json` engine + `!schedule` command |
 | `pigeon/skills.py` | Bundled skill syncing into the pi config dir |
 | `pigeon/stt.py` | Voice message transcription (external STT endpoint) |
@@ -57,8 +57,10 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
   calendar-query is broken on the target server). Match XML namespace
   prefixes independently (`<\w+:calendar`).
 - Pi sessions live at `$PI_CODING_AGENT_DIR/sessions/--<workspace-dashes>--/`.
-- Talk bot API can only **post** messages, never edit; the indicator is a
-  single robot reaction, add-only (removed only by `!stop`).
+- Talk bot API can only **post** messages, never edit; the indicator
+  is a single SILENT "🤖 👂" post when pi starts, never removed
+  (reactions were used before, but every reaction change notifies the
+  room).
 - Pi's CLI parses positional arguments that start with `-` as unknown
   flags — `pi_command` in `pi.py` therefore always puts the prompt after
   a `--` separator. Keep it that way.

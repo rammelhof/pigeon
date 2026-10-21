@@ -236,7 +236,7 @@ All in `.env` (compose reads it automatically):
   tell the user — in the user's own language — that the password for
   file access is missing and how to set it. Downloads are capped at
   `MAX_FILE_SIZE_MB`; failures become a hint with the share link so the
-  bot can still react. Use *app passwords* (Personal Information →
+  user can still open the file. Use *app passwords* (Personal Information →
   Security), one per room if you want different permissions; the `!pw`
   chat message stays in the room history — delete it afterwards or edit
   `.room.json` on the host instead.

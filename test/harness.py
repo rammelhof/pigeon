@@ -159,7 +159,8 @@ class FakePopen:
 
     def _paced(self):
         """Yield the GOOD stream with a little pacing, so a live pi run
-        takes ~0.5s (enough for the reaction-indicator tick in the tests)."""
+        takes ~0.5s (enough for the async silent-ack post to land first
+        in the stub's log, ahead of the answer)."""
         for line in GOOD:
             yield line
             time.sleep(0.05)
