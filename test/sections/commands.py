@@ -48,6 +48,7 @@ def run():
     posted = _posts("hlp00001")
     check("!help: lists the commands",
           any("!stop" in m and "!thinking" in m and "!schedule" in m
+              and "!schedule run <id>" in m
               for m in posted), str(posted)[:300])
 
     s, body = signed_webhook("bot1", new_payload("!version",

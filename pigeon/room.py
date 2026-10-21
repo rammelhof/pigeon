@@ -500,6 +500,8 @@ HELP_TEXT = (
     "  !clean (or !c) \u2014 reset my memory and workspace\n"
     "  !stop (or !s) \u2014 abort the running pi run\n"
     "  !schedule (or !sch) list \u2014 show the scheduled tasks\n"
+    "  !schedule run <id> \u2014 run it once now (testing; the\n"
+    "    schedule itself is not changed)\n"
     "  !schedule rm <id> \u2014 remove one, e.g. !schedule rm at-news\n"
     "  !mention on|off|status (or !m \u2026) \u2014 only react when "
     "    mentioned ({mention}); bare !mention / !m shows usage\n"
