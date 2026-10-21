@@ -132,9 +132,13 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   or drop scheduled tasks (the list includes the next run per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!mode [name]` switches the room's persona —
-  `default` (pi's native programmer prompt) or one of the bundled
-  personas in `pigeon/modes/` (currently `office`, an office-assistant
-  persona appended to pi's system prompt); `!help` (or `!h`) lists all
+  `programmer` (pi's native prompt), `office` (default for all rooms)
+  or `finance` (invoicing/payroll/accounting; posts a start prompt
+  asking which country's laws apply — also re-posted after `!clean`),
+  all from the .md personas in `pigeon/modes/` appended to pi's system
+  prompt; `!memory` shows the room's long-term memory
+  (`workspace/memory.md`, maintained by the memory skill, survives
+  `!clean`); `!help` (or `!h`) lists all
   commands and `!version` (or `!v`) shows the running build.
   When several messages arrive within the batch window they are merged
   into one pi run and only the **last** message is reacted — one
@@ -334,7 +338,7 @@ pigeon/
 wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> pigeon.web.startup())
 AGENTS.md         instructions for AI agents working on this repo
 skills/           pi skills mounted into the container (scheduler, nextcloud,
-                  container-tools)
+                  container-tools, memory)
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example

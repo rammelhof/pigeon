@@ -23,9 +23,11 @@ from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    resolve_room_folder, handle_bot_added, handle_bot_removed,
-                   handle_mention_command, handle_mode_command, handle_pw_command,
-                   handle_thinking_command, room_creds, room_dir,
-                   room_meta_read, strip_mention, write_room_token)
+                   handle_mention_command, handle_memory_command,
+                   handle_mode_command, handle_pw_command,
+                   handle_thinking_command, mode_start_prompt, room_creds,
+                   room_dir, room_meta_read, room_mode, strip_mention,
+                   write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -184,7 +186,13 @@ def webhook(bot):
     # workspace, so the next message starts a fresh pi session with no
     # files behind
     if message in ("!clean", "!c"):
-        post_message(room, clean_session_and_workspace(cwd))
+        reply = clean_session_and_workspace(cwd)
+        # a fresh session is a fresh start for start-prompt personas
+        # (e.g. finance asks again which country applies)
+        start = mode_start_prompt(room_mode(cwd))
+        if start and "nothing to clear" not in reply:
+            reply += "\n\n" + start
+        post_message(room, reply)
         return jsonify({"handled": "!clean"}), 200
 
     # room command: !thinking (+ !t) -> post pi's last saved thinking
@@ -217,6 +225,11 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "!mode"}), 200
+
+    reply = handle_memory_command(message, cwd)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "!memory"}), 200
 
     meta = room_meta_read(cwd)
     if message in ("!help", "!h"):

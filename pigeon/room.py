@@ -14,7 +14,7 @@ import re
 import shutil
 import threading
 
-from .config import BOTS_DIR, MODES_DIR, log
+from .config import BOTS_DIR, DEFAULT_MODE, MODES_DIR, log
 
 BOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BOT_DIR_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -178,13 +178,22 @@ def handle_pw_command(message, cwd, room):
 
 def clean_session_and_workspace(cwd):
     """Drop this room's pi sessions and wipe the non-empty workspace dir.
-    Returns the reply to post in the room."""
+    Returns the reply to post in the room. memory.md (long-term room
+    memory, see the memory skill) survives the wipe."""
     from .pi import wipe_sessions  # local import: pi depends on room
     ws = os.path.join(cwd, "workspace")
-    had_ws = os.path.isdir(ws) and bool(os.listdir(ws))
+    had_ws = os.path.isdir(ws) and \
+        any(n != MEMORY_FILE for n in os.listdir(ws))
     removed = wipe_sessions(ws)
     if os.path.isdir(ws):
-        shutil.rmtree(ws, ignore_errors=True)
+        for name in os.listdir(ws):
+            if name == MEMORY_FILE:      # long-term memory survives
+                continue
+            p = os.path.join(ws, name)
+            shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) \
+                else os.remove(p)
+    if os.path.isdir(ws) and not os.listdir(ws):
+        os.rmdir(ws)                # no memory.md -> fully gone again
     if os.path.isfile(os.path.join(cwd, THINKING_FILE)):
         os.remove(os.path.join(cwd, THINKING_FILE))  # "reset my memory"
     cleared = bool(removed) or had_ws
@@ -302,24 +311,32 @@ def strip_mention(message, bot_name):
 # ------------------------------------------------------------ persona ----
 # A persona is one .md file in pigeon/modes/; its text is appended to
 # pi's system prompt for every run of the room (pi's --append-system-
-# prompt). No file = "default" = pi's native programmer prompt.
+# prompt). "programmer" (no file) means pi's native prompt. A mode can
+# carry a start prompt (<name>_start_prompt.md) that pigeon posts when
+# the mode is entered or the session is cleared (it asks the user for
+# context the persona needs, e.g. the finance country). DEFAULT_MODE is
+# what new rooms use.
 # The active mode lives in .room.json ("mode"), like the other room
 # settings — it survives !clean, is gone with the room on bot leave.
 
 MODE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}")
 MODE_CMD_RE = re.compile(r"^!mode(?:\s+(\S+))?\s*$")
+PROGRAMMER_MODE = "programmer"      # native pi prompt, no persona file
+START_PROMPT_SUFFIX = "_start_prompt"
 
 
 def list_modes():
     """Available personas: (name, description) from the .md files in
-    MODES_DIR; the description is the file's first non-empty line."""
+    MODES_DIR (start-prompt files excluded); the description is the
+    file's first non-empty line."""
     out = []
     if os.path.isdir(MODES_DIR):
         for fn in sorted(os.listdir(MODES_DIR)):
             if not fn.endswith(".md"):
                 continue
             name = fn[:-3]
-            if not MODE_NAME_RE.fullmatch(name):
+            if not MODE_NAME_RE.fullmatch(name) or \
+                    name.endswith(START_PROMPT_SUFFIX):
                 continue
             try:
                 with open(os.path.join(MODES_DIR, fn),
@@ -331,24 +348,29 @@ def list_modes():
     return out
 
 
+def mode_names():
+    """All settable mode names: programmer first, then the file modes."""
+    return [PROGRAMMER_MODE] + [n for n, _ in list_modes()]
+
+
 def room_mode(cwd):
-    """The room's active persona ("" = pi's default prompt)."""
-    return room_meta_read(cwd).get("mode") or ""
+    """The room's active persona; unset rooms use DEFAULT_MODE."""
+    return room_meta_read(cwd).get("mode") or DEFAULT_MODE
 
 
 def set_room_mode(cwd, mode):
     meta = room_meta_read(cwd)
-    if mode:
-        meta["mode"] = mode
+    if mode == DEFAULT_MODE:
+        meta.pop("mode", None)      # the default needs no entry
     else:
-        meta.pop("mode", None)
+        meta["mode"] = mode
     room_meta_write(cwd, meta)
-    log.info("room %s: persona mode %s", os.path.basename(cwd), mode or "default")
+    log.info("room %s: persona mode %s", os.path.basename(cwd), mode)
 
 
 def mode_text(mode):
     """The text to append to pi's system prompt for a mode, or None for
-    the default mode / unknown names."""
+    programmer/empty/unknown names."""
     if not mode or not MODE_NAME_RE.fullmatch(mode):
         return None
     path = os.path.join(MODES_DIR, mode + ".md")
@@ -358,31 +380,76 @@ def mode_text(mode):
         return f.read()
 
 
+def mode_start_prompt(mode):
+    """The mode's start-prompt text (pigeon posts it on mode entry and
+    after !clean), or None."""
+    if not mode or not MODE_NAME_RE.fullmatch(mode):
+        return None
+    path = os.path.join(MODES_DIR, mode + START_PROMPT_SUFFIX + ".md")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()
+
+
 def handle_mode_command(message, cwd):
     """Handle !mode [name]: show or switch the room's persona. Returns
-    the reply to post, or None when the message is not a !mode command."""
+    the reply to post, or None when the message is not a !mode command.
+    'default' is an alias for DEFAULT_MODE; entering a mode that has a
+    start prompt posts it (the persona asks for its setup context)."""
     m = MODE_CMD_RE.match(message or "")
     if not m:
         return None
     arg = (m.group(1) or "list").lower()
-    modes = list_modes()
-    names = ["default"] + [n for n, _ in modes]
-    if arg == "list" or arg == "status":
+    if arg == "default":
+        arg = DEFAULT_MODE
+    names = mode_names()
+    if arg in ("list", "status"):
         cur = room_mode(cwd)
-        lines = ["- default — pi's native programmer prompt"]
-        lines += ["- {} — {}".format(n, d) for n, d in modes]
+        lines = ["- {} \u2014 pi's native programmer prompt (no persona)"
+                 .format(PROGRAMMER_MODE)]
+        lines += ["- {}{} \u2014 {}".format(
+                      n, " (default)" if n == DEFAULT_MODE else "", d)
+                  for n, d in list_modes()]
         return ("modes:\n" + "\n".join(lines) +
-                ("\nthis room uses: {}".format(cur or "default")))
+                "\nthis room uses: {}".format(cur))
     if arg in names:
-        set_room_mode(cwd, "" if arg == "default" else arg)
-        return ("Mode: default — pi's native programmer prompt."
-                if arg == "default" else
-                "Mode: {} — the persona applies from the next "
-                "message.".format(arg))
+        set_room_mode(cwd, arg)
+        reply = ("Mode: {} \u2014 pi's native programmer prompt."
+                 .format(PROGRAMMER_MODE) if arg == PROGRAMMER_MODE else
+                 "Mode: {} \u2014 the persona applies from the next "
+                 "message.".format(arg))
+        start = mode_start_prompt(arg)
+        if start:
+            reply += "\n\n" + start
+        return reply
     return ("Unknown mode \u2018{}\u2019. Available: {}".format(
         arg, ", ".join(names)))
 
 
+# ------------------------------------------------------------ memory cmd --
+# Long-term room memory: pi maintains workspace/memory.md (memory
+# skill); it survives !clean. !memory shows it to the user.
+
+MEMORY_FILE = "memory.md"
+
+
+def handle_memory_command(message, cwd):
+    """Handle !memory: show the room's long-term memory. Returns the
+    reply to post, or None when the message is not !memory."""
+    if (message or "").strip() != "!memory":
+        return None
+    path = os.path.join(cwd, "workspace", MEMORY_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError:        # no file yet = no entries yet
+        text = ""
+    if not text:
+        return ("I have no memory entries yet \u2014 over time I note "
+                "durable facts about you and this room in my memory "
+                "(it survives !clean).")
+    return "my memory for this room (survives !clean):\n" + text
 
 # ------------------------------------------------------- bot lifecycle ----
 # Talk sends dedicated ActivityPub events when this bot is added to or
@@ -407,8 +474,10 @@ HELP_TEXT = (
     "  !schedule rm <id> \u2014 remove one, e.g. !schedule rm at-news\n"
     "  !mention on|off|status (or !m \u2026) \u2014 only react when "
     "    mentioned ({mention}); bare !mention / !m shows usage\n"
-    "  !mode [name] \u2014 switch persona (default = programmer, "
-    "office = office assistant); bare !mode lists the modes\n"
+    "  !mode [name] \u2014 switch persona (default = office assistant, "
+    "office, finance, programmer); bare !mode lists the modes\n"
+    "  !memory \u2014 show my long-term memory for this room "
+    "(survives !clean)\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"
     "  !version (or !v) \u2014 show the pigeon version\n"
     "  !help (or !h) \u2014 this list"

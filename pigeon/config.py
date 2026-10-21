@@ -4,7 +4,7 @@ import logging
 import os
 
 # build/version info (PIGEON_COMMIT is set by the Dockerfile build arg)
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 COMMIT = os.environ.get("PIGEON_COMMIT", "unknown")
 
 NEXTCLOUD_URL = os.environ.get("NEXTCLOUD_URL", "").rstrip("/")
@@ -15,6 +15,7 @@ TALK_BOT_SECRET = os.environ.get("TALK_BOT_SECRET", "")
 BOTS_DIR = os.environ.get("BOTS_DIR", "./bots")
 MODES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "modes")
+DEFAULT_MODE = "office"  # persona for rooms that never set one
 PI_BIN = os.environ.get("PI_BIN", "pi")
 PI_CONFIG_DIR = os.environ.get(
     "PI_CODING_AGENT_DIR",

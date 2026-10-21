@@ -165,7 +165,14 @@ def run():
     check("!stop: exactly one reply, no failure notice",
           len(posted) == 1 and "stopped" in posted[0]
           and "failed" not in posted[0], str(posted)[:200])
+    # the indicator thread is async by design — poll briefly for the
+    # removal to land
     reacts = _reactions_since(rea_before)
+    for _ in range(20):
+        if reacts == [("999", E_START, "add"), ("999", E_START, "remove")]:
+            break
+        time.sleep(0.3)
+        reacts = _reactions_since(rea_before)
     check("!stop: robot reacted on start, then was removed",
           reacts == [("999", E_START, "add"), ("999", E_START, "remove")],
           str(reacts))
@@ -309,50 +316,101 @@ def run():
           and "!mention on" in _posts("qut00001")[-1]
           and "status" in _posts("qut00001")[-1],
           str(_posts("qut00001"))[-200:])
-    # 4c6. !mode: persona switch (default programmer <-> office assistant)
+    # 4c6. !mode: personas (default = office, finance w/ start prompt,
+    # programmer = native pi prompt) + start prompts + !memory
     s, body = signed_webhook("bot1", new_payload("!mode",
                                                  room_token="mdm00001",
                                                  room_name="Mode Room"))
     p = _posts("mdm00001")
-    check("!mode (bare): lists the modes and the current one",
+    check("!mode (bare): lists modes, marks the default, shows current",
           s == 200 and body.get("handled") == "!mode" and p
-          and "default" in p[-1] and "office" in p[-1]
-          and "this room uses: default" in p[-1],
-          str(p)[-300:])
+          and "programmer" in p[-1] and "office (default)" in p[-1]
+          and "finance" in p[-1] and "this room uses: office" in p[-1]
+          and "start_prompt" not in p[-1],
+          str(p)[-400:])
 
-    s, body = signed_webhook("bot1", new_payload("!mode office",
+    s, body = signed_webhook("bot1", new_payload("!mode finance",
                                                  room_token="mdm00001",
                                                  room_name="Mode Room"))
     meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
                                        "mode-room", ".room.json")))
-    check("!mode office: confirmed and persisted",
+    p = _posts("mdm00001")
+    check("!mode finance: confirmed, persisted, start prompt posted",
           s == 200 and body.get("handled") == "!mode"
-          and "Mode: office" in _posts("mdm00001")[-1]
-          and meta.get("mode") == "office",
-          str((body, meta)))
-
-    s, body = signed_webhook("bot1", new_payload("write a memo",
-                                                 room_token="mdm00001",
-                                                 room_name="Mode Room"))
-    check("!mode office: message queued", s == 202, str(body))
-    done = wait_room_done("bot1/rooms/mode-room", timeout=25, min_count=1)
-    check("!mode office: run finished (mode does not break pi)",
-          done is not None and done["status"] == "done", str(done))
+          and "Mode: finance" in p[-1] and "country" in p[-1]
+          and meta.get("mode") == "finance",
+          str((body, meta, p[-1]))[:300])
 
     # the persona text reaches pi via --append-system-prompt
+    ws = os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room")
     from pigeon.pi import pi_command
-    cmd = pi_command("hi", "bot1_mode-room",
-                     os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room"),
-                     "bot1", "mdm00001", "office")
-    check("pi_command: office mode appends the persona to the system prompt",
-          "--append-system-prompt" in cmd
-          and "office assistant" in " ".join(cmd),
-          " ".join(cmd[:20]))
-    cmd = pi_command("hi", "bot1_mode-room",
-                     os.path.join(BOTS_TEST, "bot1", "rooms", "mode-room"),
-                     "bot1", "mdm00001", "")
-    check("pi_command: default mode injects nothing",
+    cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
+                     "finance")
+    check("pi_command: finance mode appends the persona",
+          "--append-system-prompt" in cmd and "finance assistant"
+          in " ".join(cmd), " ".join(cmd[:20]))
+    cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
+                     "office")
+    check("pi_command: office mode appends the office persona",
+          "--append-system-prompt" in cmd and "office assistant"
+          in " ".join(cmd), " ".join(cmd[:20]))
+    cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
+                     "programmer")
+    check("pi_command: programmer mode injects nothing (native prompt)",
           "--append-system-prompt" not in cmd, " ".join(cmd[:20]))
+
+    # !memory: empty at first
+    s, body = signed_webhook("bot1", new_payload("!memory",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!memory (empty): handled, says no entries yet",
+          s == 200 and body.get("handled") == "!memory" and p
+          and "no memory entries" in p[-1], str(p)[-200:])
+
+    # pi (the memory skill) would write durable facts here — simulate it
+    os.makedirs(os.path.join(ws, "workspace"), exist_ok=True)
+    with open(os.path.join(ws, "workspace", "memory.md"), "w",
+              encoding="utf-8") as f:
+        f.write("2026-01-05: user is a freelancer in Austria (AT)\n")
+
+    s, body = signed_webhook("bot1", new_payload("!memory",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    check("!memory: shows the memory entries",
+          s == 200 and "freelancer in Austria" in p[-1], str(p)[-300:])
+
+    # !clean wipes the session + workspace, but memory.md survives (mode
+    # is finance -> the start prompt is posted again on the fresh session).
+    # Fake-pi writes no real session files, so fabricate one like 4b2.
+    from pigeon.pi import session_dir
+    sdir = session_dir(os.path.join(ws, "workspace"))
+    os.makedirs(sdir, exist_ok=True)
+    with open(os.path.join(
+            sdir, "2026-01-01T00-00-00Z_bot1_mode-room.jsonl"), "w") as f:
+        f.write('{"type":"session","version":3}\n')
+    with open(os.path.join(ws, "workspace", "leftover.txt"), "w") as f:
+        f.write("junk")
+    s, body = signed_webhook("bot1", new_payload("!clean",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    p = _posts("mdm00001")
+    mem = os.path.join(ws, "workspace", "memory.md")
+    check("!clean: memory survives, finance start prompt posted again",
+          s == 200 and body.get("handled") == "!clean"
+          and "pi session cleared" in p[-1]
+          and os.path.isfile(mem) and "country" in p[-1]
+          and not os.path.exists(os.path.join(ws, "workspace",
+                                              "leftover.txt")),
+          str((body, p[-1]))[:300])
+
+    s, body = signed_webhook("bot1", new_payload("!memory",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    check("!memory after !clean: entries still there",
+          "freelancer in Austria" in _posts("mdm00001")[-1],
+          str(_posts("mdm00001")[-1])[:300])
 
     s, body = signed_webhook("bot1", new_payload("!mode nope",
                                                  room_token="mdm00001",
@@ -363,13 +421,31 @@ def run():
           and "Unknown mode" in p[-1] and "office" in p[-1],
           str(p)[-300:])
 
+    s, body = signed_webhook("bot1", new_payload("!mode programmer",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
+                                       "mode-room", ".room.json")))
+    check("!mode programmer: native prompt, persisted",
+          s == 200 and "native programmer prompt" in _posts("mdm00001")[-1]
+          and meta.get("mode") == "programmer",
+          str((body, meta)))
+
     s, body = signed_webhook("bot1", new_payload("!mode default",
                                                  room_token="mdm00001",
                                                  room_name="Mode Room"))
     meta = json.load(open(os.path.join(BOTS_TEST, "bot1", "rooms",
                                        "mode-room", ".room.json")))
-    check("!mode default: back to pi's native prompt, meta cleared",
-          s == 200 and "native programmer" in _posts("mdm00001")[-1]
+    check("!mode default: back to the default (office), meta cleared",
+          s == 200 and "Mode: office" in _posts("mdm00001")[-1]
           and "mode" not in meta,
           str((body, meta)))
 
+    # a plain run in the default office mode still completes
+    s, body = signed_webhook("bot1", new_payload("write a memo",
+                                                 room_token="mdm00001",
+                                                 room_name="Mode Room"))
+    check("!mode default: message queued", s == 202, str(body))
+    done = wait_room_done("bot1/rooms/mode-room", min_count=1)
+    check("!mode default: office-mode run finished",
+          done is not None and done["status"] == "done", str(done))
