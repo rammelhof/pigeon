@@ -143,6 +143,8 @@ def run_job(key, bot, job):
             if task.get("stopped"):
                 task["status"] = "stopped"
                 break  # !stop: end quietly (no post, no retry)
+            task["status"] = "running"  # also resets "retrying" after a
+            # failed attempt, so !status and the heartbeat see the truth
             try:
                 ind("started")
                 answer, thinking = run_pi_once(task)
@@ -333,7 +335,10 @@ def heartbeat_loop():
         now = time.time()
         with _lock:
             for task in _tasks.values():
-                if task["status"] != "running":
+                # retrying is only the short sleep between attempts;
+                # both states are supervised (PI_TIMEOUT applies to the
+                # current pi process in either)
+                if task["status"] not in ("running", "retrying"):
                     continue
                 elapsed = now - task["started_at"]
                 proc = task["proc"]

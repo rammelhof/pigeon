@@ -467,17 +467,20 @@ def handle_status_command(message, cwd):
         return None
     from .tasks import snapshot  # local import: tasks depends on room
     tasks_list, _, _ = snapshot()
-    running = [t for t in tasks_list
-               if t["room_cwd"] == cwd and t["status"] == "running"]
+    active = [t for t in tasks_list
+              if t["room_cwd"] == cwd
+              and t["status"] in ("running", "retrying")]
     mode = room_mode(cwd)
-    if not running:
+    if not active:
         return "pi is not running in this room (mode: {}).".format(mode)
-    t = running[-1]
+    t = active[-1]
     words = " ".join((t.get("message") or "").split())
     preview = words[:40] + ("\u2026" if len(words) > 40 else "")
-    return ("pi is running ({}s, retry {}) \u2014 \u201c{}\u201d "
-            "(mode: {})".format(t["age_seconds"], t["retries"], preview,
-                                mode))
+    state = ("retrying after error" if t["status"] == "retrying"
+             else "running")
+    return ("pi is {} ({}s, retry {}) \u2014 \u201c{}\u201d "
+            "(mode: {})".format(state, t["age_seconds"], t["retries"],
+                                preview, mode))
 
 
 # ------------------------------------------------------- bot lifecycle ----

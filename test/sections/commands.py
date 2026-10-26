@@ -534,6 +534,21 @@ def run():
           and "retry 1" in reply and "what is my status" in reply,
           str(reply))
 
+    # a task in the short "retrying" sleep between attempts is also
+    # active — it must not be reported as "not running"
+    tasks_mod._tasks["status-retry"] = {
+        "id": "status-retry", "bot": "bot1", "cwd": room_cwd,
+        "status": "retrying", "retries": 1,
+        "created_at": time.time() - 0.5, "message": "flaky prompt",
+        "error": "boom", "proc": None,
+    }
+    reply = handle_status_command("!status", room_cwd)
+    del tasks_mod._tasks["status-retry"]
+    check("!status: reports the retrying pi as active",
+          reply is not None and "not running" not in reply
+          and "retrying" in reply and "flaky prompt" in reply,
+          str(reply))
+
     # ...and !status is not treated as a prompt
     s, body = signed_webhook("bot1", new_payload("!status",
                                                  room_token="mdm00001",
