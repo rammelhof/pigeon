@@ -387,6 +387,17 @@ def kill_active():
                 pass
 
 
+def _thinking_text(t):
+    """Completed thinking blocks + the block still being streamed (its
+    buffer) — the live thinking !status can show mid-run."""
+    blocks = list(t.get("_thinking") or [])
+    if t.get("_thinking_idx") is not None:
+        buf = (t.get("_thinking_buf") or "").strip()
+        if buf:
+            blocks.append(buf)
+    return " ".join(" ".join(b.split()) for b in blocks if b)
+
+
 def snapshot():
     """(tasks, stats, heartbeat) for /health — taken under the lock."""
     with _lock:
@@ -401,6 +412,7 @@ def snapshot():
                 "process_alive": bool(t["proc"] and t["proc"].poll() is None),
                 "error": t["error"],
                 "message": (t.get("message") or "")[:80],
+                "thinking": _thinking_text(t),
             }
             for t in _tasks.values()
         ]

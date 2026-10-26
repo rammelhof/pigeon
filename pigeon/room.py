@@ -461,8 +461,9 @@ def handle_memory_command(message, cwd):
 
 def handle_status_command(message, cwd):
     """Handle !status: report whether pi is currently running in this
-    room (for how long, on what message) or not. Returns the reply to
-    post, or None when the message is not !status."""
+    room (for how long, on what message, and its live thinking if it
+    is) or not. Returns the reply to post, or None when the message
+    is not !status."""
     if (message or "").strip() != "!status":
         return None
     from .tasks import snapshot  # local import: tasks depends on room
@@ -478,9 +479,18 @@ def handle_status_command(message, cwd):
     preview = words[:40] + ("\u2026" if len(words) > 40 else "")
     state = ("retrying after error" if t["status"] == "retrying"
              else "running")
-    return ("pi is {} ({}s, retry {}) \u2014 \u201c{}\u201d "
-            "(mode: {})".format(state, t["age_seconds"], t["retries"],
-                                preview, mode))
+    reply = ("pi is {} ({}s, retry {}) \u2014 \u201c{}\u201d "
+             "(mode: {})".format(state, t["age_seconds"], t["retries"],
+                                 preview, mode))
+    # live thinking (what pi is thinking right now; the tail, since it
+    # grows while streaming) — only for an active run, !thinking covers
+    # the last finished one
+    thinking = (t.get("thinking") or "").strip()
+    if thinking:
+        if len(thinking) > 300:
+            thinking = "\u2026" + thinking[-300:]
+        reply += "\n\nThinking (live): " + thinking
+    return reply
 
 
 # ------------------------------------------------------- bot lifecycle ----
@@ -510,7 +520,7 @@ HELP_TEXT = (
     "    mentioned ({mention}); bare !mention / !m shows usage\n"
     "  !mode [name] \u2014 switch persona (default = office); bare !mode "
     "lists the modes\n"
-    "  !status \u2014 show whether pi is running right now\n"
+    "  !status \u2014 show whether pi is running right now (incl. its live thinking)\n"
     "  !memory \u2014 show my long-term memory for this room "
     "(survives !clean)\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"

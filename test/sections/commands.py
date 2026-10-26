@@ -526,6 +526,8 @@ def run():
         "status": "running", "retries": 1,
         "created_at": time.time() - 1.3, "message": "what is my status",
         "error": None, "proc": None,
+        "_thinking": ["first I checked the calendar"],
+        "_thinking_idx": 1, "_thinking_buf": "and now I am pondering",
     }
     reply = handle_status_command("!status", room_cwd)
     del tasks_mod._tasks["status-test"]
@@ -533,6 +535,26 @@ def run():
           reply is not None and "pi is running" in reply
           and "retry 1" in reply and "what is my status" in reply,
           str(reply))
+    check("!status: shows the current (partial) thinking",
+          reply is not None and "first I checked the calendar" in reply
+          and "and now I am pondering" in reply,
+          str(reply))
+
+    # long thinking is truncated (tail, since it grows while streaming)
+    tasks_mod._tasks["status-long"] = {
+        "id": "status-long", "bot": "bot1", "cwd": room_cwd,
+        "status": "running", "retries": 0,
+        "created_at": time.time() - 5, "message": "long one",
+        "error": None, "proc": None,
+        "_thinking": ["x" * 500], "_thinking_idx": None,
+        "_thinking_buf": "stale buffer must not show",
+    }
+    reply = handle_status_command("!status", room_cwd)
+    del tasks_mod._tasks["status-long"]
+    check("!status: long thinking is truncated, stale buffer ignored",
+          reply is not None and "\u2026xxxx" in reply.replace("\n", "")
+          and "stale buffer" not in reply and len(reply) < 600,
+          str(reply)[:200])
 
     # a task in the short "retrying" sleep between attempts is also
     # active — it must not be reported as "not running"
