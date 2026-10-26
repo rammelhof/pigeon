@@ -89,14 +89,26 @@ def run():
                 body=json.dumps({"title": "r: Training",
                                  "start": "2026-10-15T10:00:00+02:00",
                                  "end": "2026-10-15T11:00:00+02:00",
-                                 "location": "gym"}), method="PUT",
+                                 "location": "gym",
+                                 "alarms": [{"action": "DISPLAY",
+                                              "minutes": -30,
+                                              "description": "warm up"}]}),
+                method="PUT",
                 headers={**auth, "Content-Type": "application/json"})
     new_uid = b.get("uid") if isinstance(b, dict) else None
+    created = next((e for e in H.events.get("family", [])
+                    if e["uid"] == new_uid), None)
     check("/nc create appointment (ICS PUT) in the right calendar",
           c == 201 and bool(new_uid)
           and any("SUMMARY:r: Training" in (e.get("summary", "") and "") or
                   e["uid"] == new_uid for e in H.events.get("family", [])),
           str(b))
+    check("/nc create appointment: alarm survives the round-trip",
+          created is not None
+          and created.get("alarms")
+          == [{"action": "DISPLAY", "minutes": -30,
+               "description": "warm up"}],
+          str(created))
     c, b = http("/nc/bot1/ncx/calendars/family?from=2026-10-15T00:00:00Z"
                 "&to=2026-10-15T23:59:59Z", headers=auth)
     check("/nc lists today's appointments (time-range filter works)",

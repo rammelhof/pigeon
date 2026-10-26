@@ -34,11 +34,9 @@ edit it locally, upload it back.
 ### Case sensitivity
 
 Nextcloud paths are **case-sensitive** (`Docs` ≠ `docs`), but the proxy
-matches them case-insensitively (list, download, upload, delete) — if the
-user says `temp` and the folder is `Temp`, it still works; mention the
-exact name when you report what you found. If a path is still not found
-(`404 not found`), list the parent folder and propose the closest
-candidates — ask the user which one they meant if it is ambiguous.
+matches them case-insensitively, so `temp` finds `Temp`; report the exact
+name. If a path still 404s, list the parent folder and propose the
+closest candidates; ask the user if ambiguous.
 
 ## Calendar
 
@@ -46,7 +44,7 @@ candidates — ask the user which one they meant if it is ambiguous.
 |---|---|
 | list calendars | `curl -sf ... "/nc/$BOT/$ROOM/calendars"` → `[{name, id}, ...]` |
 | list appointments | `curl -sf ... "/nc/$BOT/$ROOM/calendars/<id>?from=2026-10-15T00:00:00Z&to=2026-10-15T23:59:59Z"` |
-| event detail | `curl -sf ... "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` → all fields (times, all_day, description, location, rrule, attendees, alarms, …) |
+| event detail | `curl -sf ... "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` → all fields (description, location, rrule, attendees, alarms, …) |
 | create appointment | `curl -sf ... -X PUT -H 'Content-Type: application/json' -d '{"title":"r: Training","start":"2026-10-15T10:00:00+02:00"}' "/nc/$BOT/$ROOM/calendars/<id>"` |
 | change event | `curl -sf ... -X PUT -H 'Content-Type: application/json' -d '{"title":"New","calendar":"Privat"}' "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` |
 | delete appointment | `curl -sf ... -X DELETE "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` |
@@ -61,7 +59,9 @@ candidates — ask the user which one they meant if it is ambiguous.
   3339 with the user's timezone offset; `alarms`: `[{action, minutes}]`
   (negative = before start). Without `end`, the appointment is zero-length.
 * The create response contains the `uid` — keep it if the user may
-  change or delete the appointment later.
+  change or delete the appointment later. Create accepts `title`
+  (required), `start`, `end`, `location`, `description`, `attendees`,
+  `alarms` (same shape as change).
 * "Today"/"this week" appointments: compute the date range yourself and
   fetch it.
 

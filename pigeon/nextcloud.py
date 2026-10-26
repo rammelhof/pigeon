@@ -456,9 +456,26 @@ def caldav_events(creds, calid, t_from, t_to):
     return evs
 
 
+def _alarm_lines(al):
+    """One alarm dict ({action, minutes? or trigger?, description?})
+    -> its ICS VALARM lines (BEGIN..END included)."""
+    out = ["BEGIN:VALARM"]
+    if al.get("minutes") is not None:
+        out.append("TRIGGER:" + ("-" if al["minutes"] < 0 else "+")
+                   + "PT%dM" % abs(al["minutes"]))
+    elif al.get("trigger"):
+        out.append("TRIGGER:"
+                   + _ics_dt(al["trigger"]).strftime("%Y%m%dT%H%M%SZ"))
+    out.append("ACTION:" + (al.get("action") or "DISPLAY").upper())
+    if al.get("description"):
+        out.append("DESCRIPTION:" + _ics_escape(al["description"]))
+    out.append("END:VALARM")
+    return out
+
+
 def caldav_create(creds, calid, spec):
-    """spec (JSON: title/start/end/location/description/attendees) -> ICS PUT.
-    Returns the event UID."""
+    """spec (JSON: title/start/end/location/description/attendees/alarms)
+    -> ICS PUT. Returns the event UID."""
     calid = caldav_resolve(creds, calid)
     uid = uuid.uuid4().hex
 
@@ -485,6 +502,8 @@ def caldav_create(creds, calid, spec):
         ics.append("DESCRIPTION:" + _ics_escape(spec["description"]))
     for a in (spec.get("attendees") or []):
         ics.append(f"ATTENDEE;CN={a}:mailto:{a}")
+    for al in (spec.get("alarms") or []):
+        ics += _alarm_lines(al)
     ics += ["END:VEVENT", "END:VCALENDAR"]
     r = requests.put(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
                      auth=creds, data=("\r\n".join(ics)).encode(),
@@ -535,17 +554,7 @@ def _build_event_lines(e):
                    if a.get("cn")
                    else "ATTENDEE:mailto:" + a["email"])
     for al in e.get("alarms") or []:
-        out += ["BEGIN:VALARM"]
-        if al.get("minutes") is not None:
-            out.append("TRIGGER:" + ("-" if al["minutes"] < 0 else "+")
-                       + "PT%dM" % abs(al["minutes"]))
-        elif al.get("trigger"):
-            out.append("TRIGGER:" +
-                       _ics_dt(al["trigger"]).strftime("%Y%m%dT%H%M%SZ"))
-        out.append("ACTION:" + (al.get("action") or "DISPLAY").upper())
-        if al.get("description"):
-            out.append("DESCRIPTION:" + _ics_escape(al["description"]))
-        out.append("END:VALARM")
+        out += _alarm_lines(al)
     return out
 
 
