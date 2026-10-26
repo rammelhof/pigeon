@@ -110,6 +110,97 @@ def run():
     check("/nc delete appointment by uid",
           c == 200 and all(e["uid"] != new_uid
                            for e in H.events.get("family", [])), str(b))
+    # full event detail: seed one event with every readable property
+    H.events["work"].append({"uid": "evd",
+                             "summary": "Team standup (quarterly review)",
+                             "start": "20261015T100000Z",
+                             "end": "20261015T103000Z",
+                             "location": "Room 4B",
+                             "description": "Agenda:\n1. Q3 numbers",
+                             "rrule": "FREQ=WEEKLY;BYDAY=MO",
+                             "status": "CONFIRMED", "sequence": 0,
+                             "organizer": "boss@example.com",
+                             "attendees": [{"cn": "Jane Doe",
+                                            "email": "jane@example.com"}],
+                             "alarms": [{"action": "DISPLAY",
+                                         "minutes": -15},
+                                        {"action": "EMAIL", "minutes": -1440}]})
+    c, e = http("/nc/bot1/ncx/calendars/family/nosuchuid", headers=auth)
+    check("/nc event detail unknown uid: 404", c == 404, f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/calendars/work/evd", headers=auth)
+    check("/nc event detail: summary/start/end/location/description",
+          c == 200 and e.get("uid") == "evd"
+          and e.get("summary") == "Team standup (quarterly review)"
+          and e.get("start") == "20261015T100000Z"
+          and e.get("end") == "20261015T103000Z" and e.get("all_day")
+          is False and e.get("location") == "Room 4B"
+          and e.get("description") == "Agenda:\n1. Q3 numbers" and
+          "etag" in e, f"{c}: {e}")
+    check("/nc event detail: rrule/status/sequence/organizer",
+          e.get("rrule") == "FREQ=WEEKLY;BYDAY=MO" and e.get("status")
+          == "CONFIRMED" and e.get("sequence") == 0
+          and e.get("organizer") == "boss@example.com", str(e))
+    check("/nc event detail: attendees + alarms",
+          e.get("attendees") == [{"cn": "Jane Doe",
+                                  "email": "jane@example.com"}]
+          and e.get("alarms") == [{"action": "DISPLAY", "minutes": -15},
+                                  {"action": "EMAIL", "minutes": -1440}],
+          str(e))
+    H.put_calls.clear()
+    c, e = http("/nc/bot1/ncx/calendars/work/evd",
+                method="PUT",
+                body=json.dumps({"title": "Sync (moved room)",
+                                 "location": None}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc update: partial change keeps the rest, bumps sequence",
+          c == 200 and e.get("ok") is True and e.get("calendar") == "work"
+          and e["event"]["summary"] == "Sync (moved room)"
+          and e["event"]["location"] is None
+          and e["event"]["start"] == "20261015T100000Z"
+          and e["event"]["sequence"] == 1 and len(e["event"]["alarms"]) == 2
+          and e["event"]["rrule"] == "FREQ=WEEKLY;BYDAY=MO", str(e))
+    H.put_calls.clear()
+    c, e = http("/nc/bot1/ncx/calendars/work/evd", headers=auth)
+    check("/nc update: persisted (new title, location cleared, alarms)",
+          c == 200 and e.get("summary") == "Sync (moved room)"
+          and e.get("location") == "" and e.get("sequence") == 1
+          and e.get("alarms") == [{"action": "DISPLAY", "minutes": -15},
+                                  {"action": "EMAIL", "minutes": -1440}],
+          f"{c}: {e}")
+    H.put_calls.clear()
+    c, e = http("/nc/bot1/ncx/calendars/work/evd",
+                method="PUT", body=json.dumps({"calendar": "Privat"}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc update: move calendar by display name",
+          c == 200 and e.get("calendar") == "privat"
+          and e["event"]["summary"] == "Sync (moved room)", str(e))
+    check("/nc move: PUT to the new calendar, DELETE from the old one",
+          ("PUT", "/remote.php/dav/calendars/ncuser/privat/evd.ics")
+          in H.put_calls and
+          ("DELETE", "/remote.php/dav/calendars/ncuser/work/evd.ics")
+          in H.put_calls, str(H.put_calls))
+    check("/nc move: event now in the target calendar only",
+          [x["uid"] for x in H.events["privat"]] == ["evd"]
+          and all(x["uid"] != "evd" for x in H.events["work"]),
+          str(H.events))
+    c, e = http("/nc/bot1/ncx/calendars/work/evd", headers=auth)
+    check("/nc moved event: gone from the old calendar (404)", c == 404,
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/calendars/work/ev9",
+                method="PUT", body=json.dumps({"title": "x"}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc update unknown uid: 404", c == 404, f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/calendars/work/ev9",
+                method="PUT", body=json.dumps({}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc update with empty body: 400", c == 400, f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/calendars/nope/evd",
+                method="PUT", body=json.dumps({"title": "x"}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc update unknown calendar: 404 + calendar list",
+          c == 404 and isinstance(e.get("calendars"), list),
+          f"{c}: {e}")
+    H.put_calls.clear()
     # token is room-scoped: the same token must not open another room
     s, body = signed_webhook("bot1", new_payload("!pw ncuser ncpw123",
                                                  room_token="othrm001",

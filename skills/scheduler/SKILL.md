@@ -29,9 +29,9 @@ you (pi) then handle it with full room context and skills.
 | `time` | `"HH:MM"` 24h local time (daily). Combine with `tz`. |
 | `tz` | IANA timezone name, e.g. `Europe/Vienna`. Default it to the user's local zone; `Europe/Vienna` if unknown. |
 | `every_minutes` | number, ≥ 5 — repeat at this interval in minutes instead of a clock time. |
-| `weekdays` | optional list of integers 0–6 (0 = Monday … 6 = Sunday), with `time` or `every_minutes`: the entry only fires on those days (e.g. `[0,1,2,3,4]` = Mon–Fri); candidates on other days are skipped. Days are evaluated in the entry's timezone — set `tz` (or a `window` with its own `tz`) to the user's local zone so the weekday matches the user's day. |
+| `weekdays` | optional list of integers 0–6 (0 = Monday … 6 = Sunday), with `time` or `every_minutes`: the entry only fires on those days (e.g. `[0,1,2,3,4]` = Mon–Fri); days are evaluated in the entry's timezone, so set `tz` (or `window.tz`) to the user's local zone. |
 | `start_time` | optional `"HH:MM"` 24h phase anchor for `every_minutes`: runs happen at `start_time`, `start_time + interval`, `start_time + 2·interval`, … (wall clock, in the entry's timezone — `window.tz` if there is a window, else `tz`, else UTC). Makes the next run predictable and stable across restarts. Without it, the next run is simply "now + interval". |
-| `window` | optional, only with `every_minutes`: `{"start": "HH:MM", "end": "HH:MM", "tz": "<IANA>"}` — the run only happens inside this local time window; with `start_time`, anchored candidates outside the window are skipped (the phase is kept); without it, the next run outside snaps to the next window start (e.g. `every_minutes: 60, window 10:00–22:00` → runs at 10, 11, …, 21:00 each day). |
+| `window` | optional, only with `every_minutes`: `{"start": "HH:MM", "end": "HH:MM", "tz": "<IANA>"}` — runs only inside this local time window; with `start_time` candidates outside are skipped (phase kept), without it the next run snaps to the next window start. |
 
 For "every hour between 10:00 and 22:00" that is `every_minutes: 60` plus
 the window above. For "every 15 minutes starting at 10:30" (predictable

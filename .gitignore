@@ -2,4 +2,6 @@
 __pycache__/
 *.pyc
 bots/*/
+bots-test/
+pi-cfg-test/
 test/fake-bin/

@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import json
 import re
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class H(BaseHTTPRequestHandler):
@@ -28,6 +28,113 @@ class H(BaseHTTPRequestHandler):
     events = {"family": [{"uid": "ev1", "summary": "Old thing",
                           "start": "2000-01-01T08:00:00+01:00"}],
                "work": [], "privat": [], "Privat (2)": []}
+
+    @staticmethod
+    def _unesc(v):
+        return v.replace("\\n", "\n").replace("\\,", ",") \
+            .replace("\\;", ";").replace("\\\\", "\\")
+
+    @staticmethod
+    def _esc(v):
+        v = v or ""
+        return v.replace("\\", "\\\\").replace(";", "\\;") \
+            .replace(",", "\\,").replace("\n", "\\n")
+
+    @staticmethod
+    def _event_ics(e):
+        """Full ICS for one stored event (everything it has)."""
+        ics = ["BEGIN:VCALENDAR", "VERSION:2.0",
+               "PRODID:-//fake-nc//EN", "BEGIN:VEVENT",
+               "UID:" + e["uid"], "DTSTAMP:20260101T000000Z",
+               "DTSTART:" + e.get("start", "20260101T000000Z")]
+        if e.get("end"):
+            ics.append("DTEND:" + e["end"])
+        ics.append("SUMMARY:" + H._esc(e.get("summary", "")))
+        for k in ("location", "description", "rrule", "status"):
+            if e.get(k):
+                ics.append(k.upper() + ":" + (H._esc(e[k])
+                            if k in ("location", "description") else e[k]))
+        if e.get("sequence") is not None:
+            ics.append("SEQUENCE:" + str(e["sequence"]))
+        if e.get("organizer"):
+            ics.append("ORGANIZER:mailto:" + e["organizer"])
+        for a in e.get("attendees") or []:
+            ics.append("ATTENDEE;CN=%s:mailto:%s" % (a.get("cn", ""),
+                                                     a["email"]))
+        for al in e.get("alarms") or []:
+            ics.append("BEGIN:VALARM")
+            ics.append("TRIGGER:" + (("-" if al["minutes"] < 0 else "+")
+                         + "PT%dM" % abs(al["minutes"])
+                         if al.get("minutes") is not None
+                         else al.get("trigger", "")))
+            ics.append("ACTION:" + al.get("action", "DISPLAY"))
+            if al.get("description"):
+                ics.append("DESCRIPTION:" + H._esc(al["description"]))
+            ics.append("END:VALARM")
+        ics += ["END:VEVENT", "END:VCALENDAR"]
+        return ("\r\n".join(ics) + "\r\n").encode()
+
+    @staticmethod
+    def _parse_event(data, path):
+        """ICS body -> stored event dict (everything the client can send)."""
+        uid = path.rstrip("/").rsplit("/", 1)[-1].replace(".ics", "")
+        ev = {"uid": uid, "summary": "", "start": "", "end": "",
+              "location": "", "description": "", "rrule": "", "status": "",
+              "sequence": None, "organizer": "", "attendees": [],
+              "alarms": []}
+        alarms, cur = [], None
+        for line in data.decode("utf-8", "replace").replace("\r\n", "\n").split("\n"):
+            if line.startswith("BEGIN:VALARM"):
+                cur = {"action": "DISPLAY", "minutes": None, "description": ""}
+                continue
+            if line.startswith("END:VALARM"):
+                if cur:
+                    alarms.append(cur)
+                cur = None
+                continue
+            if cur is not None:
+                if line.startswith("TRIGGER:"):
+                    v = line[8:].strip()
+                    if re.match(r"^[+-]P", v):
+                        m2 = re.fullmatch(
+                            r"[+-]P(?:(\d+)D)?"
+                            r"(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", v)
+                        sign = -1 if v.startswith("-") else 1
+                        hours = int(m2.group(2) or 0)
+                        mnt = int(m2.group(3) or 0)
+                        sec = int(m2.group(4) or 0)
+                        cur["minutes"] = sign * (hours * 60 + mnt
+                                                 + sec // 60)
+                    else:
+                        cur["trigger"] = v.replace(":", "")
+                elif line.startswith("ACTION:"):
+                    cur["action"] = line[7:].strip().upper()
+                elif line.startswith("DESCRIPTION:"):
+                    cur["description"] = H._unesc(line[12:].strip())
+                continue
+            for key, tag in (("summary", "SUMMARY"), ("start", "DTSTART"),
+                             ("end", "DTEND"), ("location", "LOCATION"),
+                             ("description", "DESCRIPTION"),
+                             ("rrule", "RRULE"), ("status", "STATUS"),
+                             ("organizer", "ORGANIZER")):
+                if line.startswith(tag + ":"):
+                    v = H._unesc(line[len(tag) + 1:].strip())
+                    ev[key] = v.split(":", 1)[-1] if key == "organizer" \
+                        else v
+                    break
+            else:
+                m2 = re.match(r"^SEQUENCE:(\d+)$", line)
+                if m2:
+                    ev["sequence"] = int(m2.group(1))
+                    continue
+                m2 = re.match(r"^ATTENDEE(;CN=([^;]*))?:mailto:(.+)$", line)
+                if m2:
+                    ev["attendees"].append({"cn": (m2.group(2) or "").strip(),
+                                            "email": m2.group(3).strip()})
+        ev["alarms"] = alarms
+        ev["ics"] = data
+        return ev
+
     put_calls = []  # (method, path) for the /nc proxy tests
     # /v1/audio/transcriptions (STT): calls recorded as
     # (authorization_header, model, filename); expected api key
@@ -110,12 +217,32 @@ class H(BaseHTTPRequestHandler):
                 self._json({"error": "unauthorized"}, code=401)
                 return
             H.put_calls.append(("GET", self.path))
-            cal = self.path.rstrip("/").rsplit("/", 1)[-1]
-            ics = ("BEGIN:VCALENDAR\r\n" + "".join(
-                "BEGIN:VEVENT\r\nUID:%s\r\nSUMMARY:%s\r\n"
-                "DTSTART:%s\r\nEND:VEVENT\r\n" % (e["uid"], e["summary"],
-                                                  e["start"])
-                for e in H.events.get(cal, [])) + "END:VCALENDAR\r\n")
+            parts = self.path.rstrip("/").split("/")
+            if len(parts) == 7:  # one event: <user>/<cal>/<uid>.ics
+                cal = parts[-2]
+                e = next((x for x in H.events.get(cal, [])
+                          if x["uid"] == parts[-1].replace(".ics", "")),
+                         None)
+                if e is None:
+                    self._xml_error(f'File with name {parts[-1]}'
+                                    ' could not be located')
+                    return
+                raw = e.get("ics") or H._event_ics(e)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/calendar")
+                self.send_header("ETag", '"fake-' + e["uid"] + '"')
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            cal = parts[-1]
+            inner = "".join(
+                H._event_ics(e).decode()
+                .replace("BEGIN:VCALENDAR\r\n", "")
+                .replace("END:VCALENDAR\r\n", "")
+                .replace("\r\n", "\r\n")
+                for e in H.events.get(cal, []))
+            ics = ("BEGIN:VCALENDAR\r\n" + inner + "END:VCALENDAR\r\n")
             raw = ics.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/calendar")
@@ -277,16 +404,10 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/remote.php/dav/calendars/"):
             parts = self.path.rstrip("/").split("/")
             cal = parts[-2]
-            uid = parts[-1].replace(".ics", "")
-            # parse SUMMARY/DTSTART out of the ICS body so GET can serve them
-            summary, start = "", ""
-            for line in data.decode("utf-8", "replace").replace("\r\n", "\n").split("\n"):
-                if line.startswith("SUMMARY:"):
-                    summary = line[len("SUMMARY:"):].strip()
-                elif line.startswith("DTSTART:"):
-                    start = line[len("DTSTART:"):].strip()
-            H.events.setdefault(cal, []).append(
-                {"uid": uid, "summary": summary, "start": start})
+            ev = H._parse_event(data, self.path)
+            lst = H.events.setdefault(cal, [])
+            lst[:] = [x for x in lst if x["uid"] != ev["uid"]]
+            lst.append(ev)
             self.send_response(201)
             self.end_headers()
         else:
@@ -361,7 +482,9 @@ class H(BaseHTTPRequestHandler):
 
 def make_server(port=8099, secret=None):
     H.secret = secret
-    return HTTPServer(("127.0.0.1", port), H)
+    s = ThreadingHTTPServer(("127.0.0.1", port), H)
+    s.daemon_threads = True
+    return s
 
 
 if __name__ == "__main__":

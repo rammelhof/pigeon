@@ -269,6 +269,10 @@ class UnknownCalendar(RuntimeError):
         super().__init__(f"unknown calendar {calid!r}; available: {names}")
 
 
+class EventNotFound(RuntimeError):
+    """The calendar has no event with the given UID."""
+
+
 def _ics_dt(value):
     """DTSTART/DTEND (compact RFC5545, ISO, date, UTC, TZID=...) -> naive
     datetime (UTC for offset values), or None."""
@@ -309,32 +313,111 @@ def _rfc3339(value):
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _ics_escape(text):
+    """Escape a text property value (RFC 5545 3.3.11): backslash, semicolon,
+    comma, line breaks."""
+    text = (text or "").replace("\\", "\\\\")
+    return text.replace(";", "\\;").replace(",", "\\,") \
+        .replace("\r\n", "\\n").replace("\n", "\\n") \
+        .replace("\r", "\\n")
+
+
+def _ics_unescape(value):
+    """Reverse _ics_escape on a parsed text property value."""
+    return (value or "").replace("\\n", "\n").replace("\\,", ",") \
+        .replace("\\;", ";").replace("\\\\", "\\")
+
+
 def _vevents(ics):
-    """All VEVENTs of an ICS text as dicts. The start/end keys hold the
-    raw ICS values (what the client should show); _start/_end are the
-    parsed naive datetimes used for the range filter."""
+    """All VEVENTs of an ICS text as dicts — everything readable: the
+    basic properties, recurrence, organizer/attendees and the VALARMs
+    (alerts/notifications). The start/end keys hold the raw ICS values
+    (what the client should show); _start/_end are the parsed naive
+    datetimes used for the range filter."""
     text = re.sub(r"\r?\n[ \t]", "", ics)  # unfold ICS continuation
+
+    def _alarm(blk):
+        """VALARM block -> {action, minutes?, trigger?, description?}."""
+        def g(tag):
+            mm = re.search(r"^" + tag + r"(?::|;[^:]*)?(.*)$", blk,
+                           re.M | re.I)
+            return _ics_unescape(mm.group(1).strip()) if mm else ""
+
+        m = re.search(r"^TRIGGER(;[^:]*)?:(.*)$", blk, re.M | re.I)
+        val = m.group(2).strip() if m else ""
+        out = {"action": (g("ACTION") or "DISPLAY").upper()}
+        if re.match(r"^\d{4}-\d{2}-\d{2}", val):  # absolute trigger
+            dt = _ics_dt(val)
+            if dt:
+                out["trigger"] = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        elif val and val[0] in "+-":  # relative (PT.. duration)
+            m2 = re.fullmatch(r"([+-])P(?:(\d+)D)?"
+                              r"(?:T(?:(\d+)H)?(?:(\d+)M)?"
+                              r"(?:(\d+)S)?)?", val)
+            if m2:
+                hours = int(m2.group(3) or 0)
+                minutes = int(m2.group(4) or 0)
+                out["minutes"] = (-hours * 60 - minutes
+                                  if m2.group(1) == "-"
+                                  else hours * 60 + minutes)
+        desc = g("DESCRIPTION")
+        if desc:
+            out["description"] = desc
+        return out
+
+    def _attendee(val):
+        """ATTENDEE value -> {email, cn?}; ignores non-mailto values."""
+        email = val.split(":", 1)[-1].strip()
+        if not email.startswith("mailto:"):
+            return None
+        email = email[len("mailto:"):].strip()
+        out = {"email": email}
+        cn = re.search(r"CN=([^;:]*)", val)
+        if cn:
+            out["cn"] = cn.group(1).strip()
+        return out
+
     out = []
     for m in re.finditer(r"BEGIN:VEVENT(.*?)END:VEVENT", text, re.S):
         blk = m.group(1)
 
         def g(tag, _blk=blk):
             mm = re.search(r"^" + tag + r"[;:](.*)$", _blk, re.M | re.I)
-            return mm.group(1).strip() if mm else ""
+            return _ics_unescape(mm.group(1).strip()) if mm else ""
 
         start = _ics_dt(g("DTSTART"))
         if start is None:
             continue
         end = _ics_dt(g("DTEND"))
-        if end is None or end <= start:  # no/one-point DTEND -> 1 hour
-            end = start + timedelta(hours=1)
-        # local wall clock (all-day or no TZ) vs UTC range: widen the day
-        if re.fullmatch(r"\d{8}", g("DTSTART")) is not None:  # all-day
-            start, end = start, start + timedelta(days=1)
-        out.append({"summary": g("SUMMARY"), "start": g("DTSTART"),
-                    "end": g("DTEND"), "location": g("LOCATION"),
-                    "description": g("DESCRIPTION"), "uid": g("UID"),
-                    "_start": start, "_end": end})
+        dur_all_day = False
+        if end is None or end <= start:  # no/one-point DTEND
+            if re.fullmatch(r"\d{8}", g("DTSTART")) is not None:  # all-day
+                end = start + timedelta(days=1)
+                dur_all_day = True
+            else:
+                end = start + timedelta(hours=1)
+        ev = {"uid": g("UID"), "summary": g("SUMMARY"),
+              "location": g("LOCATION"), "description": g("DESCRIPTION"),
+              "start": g("DTSTART"), "end": g("DTEND"),
+              "all_day": re.fullmatch(r"\d{8}", g("DTSTART")) is not None,
+              "rrule": g("RRULE"), "status": g("STATUS"),
+              "organizer": "",
+              "attendees": [a for a in
+                            (_attendee(mm.group(1))
+                             for mm in re.finditer(
+                                 r"^ATTENDEE[;:](.*)$", blk, re.M | re.I))
+                            if a],
+              "alarms": [_alarm(a) for a in re.findall(
+                  r"BEGIN:VALARM(.*?)END:VALARM", blk, re.S)],
+              "_start": start, "_end": end, "_durday": dur_all_day}
+        om = re.search(r"^ORGANIZER[;:](.*)$", blk, re.M | re.I)
+        if om:
+            ev["organizer"] = _ics_unescape(
+                om.group(1).split(":", 1)[-1].strip())
+        seq = g("SEQUENCE")
+        if seq.isdigit():
+            ev["sequence"] = int(seq)
+        out.append(ev)
     return out
 
 
@@ -395,11 +478,11 @@ def caldav_create(creds, calid, spec):
            "DTSTART:" + dt(st)]
     if spec.get("end"):
         ics.append("DTEND:" + dt(spec["end"]))
-    ics.append(f"SUMMARY:{spec['title']}")
+    ics.append(f"SUMMARY:{_ics_escape(spec['title'])}")
     if spec.get("location"):
-        ics.append("LOCATION:" + spec["location"])
+        ics.append("LOCATION:" + _ics_escape(spec["location"]))
     if spec.get("description"):
-        ics.append("DESCRIPTION:" + spec["description"])
+        ics.append("DESCRIPTION:" + _ics_escape(spec["description"]))
     for a in (spec.get("attendees") or []):
         ics.append(f"ATTENDEE;CN={a}:mailto:{a}")
     ics += ["END:VEVENT", "END:VCALENDAR"]
@@ -409,3 +492,135 @@ def caldav_create(creds, calid, spec):
     if r.status_code not in (201, 204):
         raise RuntimeError(f"appointment: HTTP {r.status_code}")
     return uid
+
+
+def _build_event_lines(e):
+    """One event dict (from _vevents) -> the ICS lines of its VEVENT
+    (without BEGIN/END:VEVENT). All datetimes are written as UTC (Z);
+    an all-day event stays a bare date."""
+    dt = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = [f"UID:{e.get('uid', '')}", f"DTSTAMP:{dt}"]
+
+    def d(v, date_only):
+        d2 = _ics_dt(v)
+        if d2 is None:
+            return v
+        if date_only:
+            return d2.strftime("%Y%m%d")
+        if d2.tzinfo is None:
+            return d2.strftime("%Y%m%dT%H%M%SZ")
+        return d2.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    all_day = bool(e.get("all_day"))
+    out.append("DTSTART:" + d(e.get("start", ""), all_day))
+    end = e.get("end", "")
+    if end or e.get("_durday"):
+        out.append("DTEND:" + d(end, all_day)
+                   if end else (e["_start"] + timedelta(days=1))
+                   .strftime("%Y%m%d"))
+    out.append("SUMMARY:" + _ics_escape(e.get("summary", "")))
+    for key, tag in (("description", "DESCRIPTION"), ("location", "LOCATION")):
+        if e.get(key):
+            out.append(f"{tag}:{_ics_escape(e[key])}")
+    for key, tag in (("rrule", "RRULE"), ("status", "STATUS")):
+        if e.get(key):
+            out.append(f"{tag}:{e[key]}")
+    if e.get("sequence") is not None:
+        out.append(f"SEQUENCE:{e['sequence']}")
+    if e.get("organizer"):
+        out.append("ORGANIZER:mailto:" + e["organizer"])
+    for a in e.get("attendees") or []:
+        out.append(("ATTENDEE;CN=%s:mailto:%s" % (a.get("cn", ""),
+                                                  a["email"]))
+                   if a.get("cn")
+                   else "ATTENDEE:mailto:" + a["email"])
+    for al in e.get("alarms") or []:
+        out += ["BEGIN:VALARM"]
+        if al.get("minutes") is not None:
+            out.append("TRIGGER:" + ("-" if al["minutes"] < 0 else "+")
+                       + "PT%dM" % abs(al["minutes"]))
+        elif al.get("trigger"):
+            out.append("TRIGGER:" +
+                       _ics_dt(al["trigger"]).strftime("%Y%m%dT%H%M%SZ"))
+        out.append("ACTION:" + (al.get("action") or "DISPLAY").upper())
+        if al.get("description"):
+            out.append("DESCRIPTION:" + _ics_escape(al["description"]))
+        out.append("END:VALARM")
+    return out
+
+
+def caldav_get_event(creds, calid, uid):
+    """One event of a calendar (plain GET, ETag) -> its full dict
+    (all fields _vevents parses). Raises RuntimeError when missing."""
+    calid = caldav_resolve(creds, calid)
+    r = requests.get(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
+                     auth=creds, timeout=30)
+    _dbg(r, f"GET event {calid}/{uid}")
+    if r.status_code == 404:
+        raise EventNotFound(
+            f"event {uid!r} not found in calendar {calid!r}")
+    if r.status_code >= 400:
+        raise RuntimeError(f"event: HTTP {r.status_code}")
+    m = re.search(r"BEGIN:VEVENT(.*?)END:VEVENT", r.text, re.S)
+    if not m:
+        raise RuntimeError("event has no VEVENT")
+    ev = _vevents("BEGIN:VEVENT" + m.group(1) + "END:VEVENT")
+    if not ev:
+        raise RuntimeError("event could not be parsed")
+    out = {k: v for k, v in ev[0].items() if not k.startswith("_")}
+    out["etag"] = r.headers.get("ETag", "")
+    return out
+
+
+def caldav_update(creds, calid, uid, spec):
+    """Change an event in place. spec: {title?, start?, end?, location?,
+    description?, all_day?, rrule?, status?, sequence?, organizer?,
+    attendees?, alarms?, calendar?} — every given field replaces the
+    current value, every omitted one keeps it (a field set to null is
+    cleared). calendar=<name or id> moves the event to another
+    calendar (PUT to the new one, DELETE from the old). Bumps SEQUENCE
+    when not given. Returns (updated_event, calendar_id)."""
+    calid = caldav_resolve(creds, calid)
+    ev = dict(caldav_get_event(creds, calid, uid))
+    ev.pop("etag", None)
+    if "title" in spec:
+        ev["summary"] = spec["title"]
+    for k in ("start", "end", "location", "description", "rrule",
+              "status", "organizer", "attendees", "alarms"):
+        if k in spec:
+            ev[k] = spec[k]
+    if "all_day" in spec:
+        ev["all_day"] = bool(spec["all_day"])
+    if "sequence" not in spec:
+        ev["sequence"] = (ev.get("sequence") or 0) + 1
+    else:
+        ev["sequence"] = int(spec["sequence"]) if spec["sequence"] is not None \
+            else 0
+    body = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"
+            "PRODID:-//pigeon//EN\r\nBEGIN:VEVENT\r\n"
+            + "\r\n".join(_build_event_lines(ev))
+            + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    target = caldav_resolve(creds, spec["calendar"]) \
+        if spec.get("calendar") else calid
+    if target != calid:
+        r = requests.put(f"{caldav_base(creds[0])}/{target}/{uid}.ics",
+                         auth=creds, data=body.encode(),
+                         headers={"Content-Type": "text/calendar"},
+                         timeout=30)
+        _dbg(r, f"MOVE event {uid} -> {target}")
+        if r.status_code not in (200, 201, 204):
+            raise RuntimeError(f"move: HTTP {r.status_code}")
+        r = requests.delete(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
+                            auth=creds, timeout=30)
+        _dbg(r, f"DELETE old event {calid}/{uid}")
+        if r.status_code not in (200, 204):
+            raise RuntimeError(f"delete old copy: HTTP {r.status_code}")
+    else:
+        r = requests.put(f"{caldav_base(creds[0])}/{calid}/{uid}.ics",
+                         auth=creds, data=body.encode(),
+                         headers={"Content-Type": "text/calendar"},
+                         timeout=30)
+        _dbg(r, f"PUT event {calid}/{uid}")
+        if r.status_code not in (200, 201, 204):
+            raise RuntimeError(f"update: HTTP {r.status_code}")
+    return {k: v for k, v in ev.items() if not k.startswith("_")}, target

@@ -10,7 +10,9 @@ not in pi's environment on purpose: the proxy is the only door.
   DELETE /nc/<bot>/<room>/files?path=FILE       delete
   GET    /nc/<bot>/<room>/calendars             list calendars
   GET    /nc/<bot>/<room>/calendars/<calid>?from=&to=   events (RFC3339)
+  GET    /nc/<bot>/<room>/calendars/<calid>/<uid>      full event
   PUT    /nc/<bot>/<room>/calendars/<calid>     new appointment (JSON)
+  PUT    /nc/<bot>/<room>/calendars/<calid>/<uid>      change (JSON, partial)
   DELETE /nc/<bot>/<room>/calendars/<calid>/<uid>      delete (UID)
 """
 
@@ -23,9 +25,10 @@ import requests
 from flask import Blueprint, Response, jsonify, request
 
 from .config import BOTS_DIR, MAX_FILE_SIZE_MB, NEXTCLOUD_URL, log
-from .nextcloud import (UnknownCalendar, _dbg, caldav_base,
+from .nextcloud import (EventNotFound, UnknownCalendar, _dbg, caldav_base,
                         caldav_calendars, caldav_create, caldav_events,
-                        caldav_resolve, dav_path, dav_prop)
+                        caldav_get_event, caldav_resolve, caldav_update,
+                        dav_path, dav_prop)
 from .room import ROOM_DIR_RE, room_creds
 from .security import nc_verify
 
@@ -140,25 +143,21 @@ def files_list_or_download(bot, room):
         return jsonify({"error": "bad path"}), 400
 
     if request.args.get("download"):
-        resolved, entry = _resolve(rel, creds)
-        if entry is None or entry["type"] != "file":
-            return jsonify({"error": f"not found: {rel}"}), 404
-        with requests.get(NEXTCLOUD_URL + dav_path(resolved),
-                          auth=creds, stream=True, timeout=(10, 600)) as r:
-            if r.status_code >= 400:
-                return jsonify({"error": f"download: HTTP {r.status_code}"}), 502
-            data = r.raw.read(MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
-        if len(data) > MAX_FILE_SIZE_MB * 1024 * 1024:
-            return jsonify({"error": "file too large"}), 413
-        return Response(data, mimetype=r.headers.get("Content-Type"),
-                        headers={"Content-Disposition":
-                                 f'attachment; filename="{entry["name"]}"'})
+        try:
+            return _file_download(rel, creds)
+        except Exception as e:
+            log.warning("nc download failed: %s", e)
+            return jsonify({"error": str(e)}), 502
 
-    entries, status = _propfind(rel, creds)
-    if status == 404 and rel:  # wrong case somewhere? resolve it
-        resolved, last = _resolve(rel, creds)
-        if last is not None:
-            rel, (entries, status) = resolved, _propfind(resolved, creds)
+    try:
+        entries, status = _propfind(rel, creds)
+        if status == 404 and rel:  # wrong case somewhere? resolve it
+            resolved, last = _resolve(rel, creds)
+            if last is not None:
+                rel, (entries, status) = resolved, _propfind(resolved, creds)
+    except Exception as e:
+        log.warning("nc list failed: %s", e)
+        return jsonify({"error": str(e)}), 502
     if status not in (200, 207):
         return jsonify({"error": f"list: HTTP {status}"}), 502
     return jsonify({"path": rel, "entries": entries})
@@ -174,6 +173,22 @@ def _resolved_parent(rel, creds):
         return None
     return (resolved + "/" + rel.rpartition("/")[2]) if resolved else \
         rel.rpartition("/")[2]
+
+
+def _file_download(rel, creds):
+    resolved, entry = _resolve(rel, creds)
+    if entry is None or entry["type"] != "file":
+        return jsonify({"error": f"not found: {rel}"}), 404
+    with requests.get(NEXTCLOUD_URL + dav_path(resolved),
+                      auth=creds, stream=True, timeout=(10, 600)) as r:
+        if r.status_code >= 400:
+            return jsonify({"error": f"download: HTTP {r.status_code}"}), 502
+        data = r.raw.read(MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
+    if len(data) > MAX_FILE_SIZE_MB * 1024 * 1024:
+        return jsonify({"error": "file too large"}), 413
+    return Response(data, mimetype=r.headers.get("Content-Type"),
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{entry["name"]}"'})
 
 
 @bp.put("/nc/<bot>/<room>/files")
@@ -197,8 +212,12 @@ def files_upload(bot, room):
     body = request.get_data()[:cap + 1]
     if len(body) > cap:
         return jsonify({"error": f"file exceeds {MAX_FILE_SIZE_MB:.0f} MB"}), 413
-    r = requests.put(NEXTCLOUD_URL + url, auth=creds, data=body,
-                     timeout=(10, 600))
+    try:
+        r = requests.put(NEXTCLOUD_URL + url, auth=creds, data=body,
+                         timeout=(10, 600))
+    except Exception as e:
+        log.warning("nc upload failed: %s", e)
+        return jsonify({"error": str(e)}), 502
     if r.status_code not in (201, 204):
         return jsonify({"error": f"upload: HTTP {r.status_code}"}), 502
     return jsonify({"ok": True, "path": rel, "bytes": len(body)}), 201
@@ -216,7 +235,11 @@ def files_delete(bot, room):
         return jsonify({"error": "bad path"}), 400
     rel = _resolved_parent(rel, creds) or rel
     url = dav_path(rel)
-    r = requests.delete(NEXTCLOUD_URL + url, auth=creds, timeout=30)
+    try:
+        r = requests.delete(NEXTCLOUD_URL + url, auth=creds, timeout=30)
+    except Exception as e:
+        log.warning("nc delete failed: %s", e)
+        return jsonify({"error": str(e)}), 502
     if r.status_code not in (200, 204):
         return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
     return jsonify({"ok": True, "path": rel})
@@ -285,6 +308,58 @@ def calendar_create(bot, room, calid):
                     "title": spec["title"], "start": spec["start"]}), 201
 
 
+@bp.get("/nc/<bot>/<room>/calendars/<calid>/<uid>")
+@logged
+def calendar_event(bot, room, calid, uid):
+    """One event, full detail: all properties (summary, description,
+    location, start/end, all_day, rrule, status, sequence, organizer,
+    attendees, alarms)."""
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", calid)
+            and re.fullmatch(r"[^/?#&<>]{1,300}", uid)):
+        return jsonify({"error": "bad calendar id or uid"}), 400
+    try:
+        return jsonify(caldav_get_event(creds, calid, uid))
+    except UnknownCalendar as e:
+        return _unknown(e)
+    except EventNotFound as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        log.warning("nc event failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@bp.put("/nc/<bot>/<room>/calendars/<calid>/<uid>")
+@logged
+def calendar_update(bot, room, calid, uid):
+    """Change an event: {title?, start?, end?, location?, description?,
+    all_day?, rrule?, status?, sequence?, organizer?, attendees?,
+    alarms?, calendar?} — given fields replace, omitted keep, null
+    clears. calendar=<name or id> moves the event to another calendar."""
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", calid)
+            and re.fullmatch(r"[^/?#&<>]{1,300}", uid)):
+        return jsonify({"error": "bad calendar id or uid"}), 400
+    spec = request.get_json(silent=True)
+    if not isinstance(spec, dict) or not spec:
+        return jsonify({"error": "JSON body with the changed fields "
+                                 "is required"}), 400
+    try:
+        ev, calid = caldav_update(creds, calid, uid, spec)
+    except UnknownCalendar as e:
+        return _unknown(e)
+    except EventNotFound as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        log.warning("nc update failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"ok": True, "uid": uid, "calendar": calid, "event": ev})
+
+
 @bp.delete("/nc/<bot>/<room>/calendars/<calid>/<uid>")
 @logged
 def calendar_delete(bot, room, calid, uid):
@@ -300,6 +375,9 @@ def calendar_delete(bot, room, calid, uid):
                             auth=creds, timeout=30)
     except UnknownCalendar as e:
         return _unknown(e)
+    except Exception as e:
+        log.warning("nc event delete failed: %s", e)
+        return jsonify({"error": str(e)}), 502
     if r.status_code not in (200, 204):
         return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
     return jsonify({"ok": True, "uid": uid})

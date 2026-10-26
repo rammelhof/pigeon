@@ -46,16 +46,22 @@ candidates — ask the user which one they meant if it is ambiguous.
 |---|---|
 | list calendars | `curl -sf ... "/nc/$BOT/$ROOM/calendars"` → `[{name, id}, ...]` |
 | list appointments | `curl -sf ... "/nc/$BOT/$ROOM/calendars/<id>?from=2026-10-15T00:00:00Z&to=2026-10-15T23:59:59Z"` |
+| event detail | `curl -sf ... "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` → all fields (times, all_day, description, location, rrule, attendees, alarms, …) |
 | create appointment | `curl -sf ... -X PUT -H 'Content-Type: application/json' -d '{"title":"r: Training","start":"2026-10-15T10:00:00+02:00"}' "/nc/$BOT/$ROOM/calendars/<id>"` |
+| change event | `curl -sf ... -X PUT -H 'Content-Type: application/json' -d '{"title":"New","calendar":"Privat"}' "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` |
 | delete appointment | `curl -sf ... -X DELETE "/nc/$BOT/$ROOM/calendars/<id>/<uid>"` |
 
 * `calid` accepts the calendar **id or its display name**, any casing —
   the proxy resolves it. If it still can't resolve it, the 404 error body
   contains the full `calendars` list: pick the right one from there.
-* `start`/`end` are RFC 3339 — include the user's timezone offset when they
-  give a local time. Without `end`, the appointment is all-day/zero-length.
-* The create response contains the `uid` — mention it only if the user asks
-  to change or delete the appointment later.
+* Change: only passed fields are replaced, omitted ones are kept, `null`
+  clears. Fields: `title`, `start`, `end`, `location`, `description`,
+  `all_day`, `rrule`, `status`, `sequence`, `organizer`, `attendees`,
+  `alarms`; `calendar:"<name>"` moves the event. `start`/`end` are RFC
+  3339 with the user's timezone offset; `alarms`: `[{action, minutes}]`
+  (negative = before start). Without `end`, the appointment is zero-length.
+* The create response contains the `uid` — keep it if the user may
+  change or delete the appointment later.
 * "Today"/"this week" appointments: compute the date range yourself and
   fetch it.
 
