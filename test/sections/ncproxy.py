@@ -219,6 +219,11 @@ def run():
           and {(b["id"], b["name"]) for b in e["addressbooks"]}
           == {("personal", "Personal"), ("business", "Business")},
           f"{c}: {e}")
+    check("/nc CardDAV home probed at the NC-34 path (users/<name>/)",
+          any(m == "PROPFIND"
+              and p.startswith("/remote.php/dav/addressbooks/users/")
+              for m, p in H.put_calls),
+          str(H.put_calls))
     c, e = http("/nc/bot1/ncx/addressbooks/personal", headers=auth)
     check("/nc lists contacts of a book", c == 200
           and [b["fn"] for b in e["contacts"]] == ["Jane Doe"]
@@ -226,8 +231,10 @@ def run():
           and e["contacts"][0].get("modified"),
           f"{c}: {e}")
     c, e = http("/nc/bot1/ncx/addressbooks/Personal?q=jane", headers=auth)
-    check("/nc contact search ?q= matches (case-insens. name)", c == 200
-          and [b["uri"] for b in e["contacts"]] == ["jane@acme"],
+    check("/nc contact search ?q= matches (case-insens., fn from the card)",
+          c == 200
+          and [b["uri"] for b in e["contacts"]] == ["jane@acme"]
+          and [b["fn"] for b in e["contacts"]] == ["Jane Doe"],
           f"{c}: {e}")
     c, e = http("/nc/bot1/ncx/addressbooks/personal?q=zzz", headers=auth)
     check("/nc contact search: no match -> empty", c == 200

@@ -638,20 +638,48 @@ def caldav_update(creds, calid, uid, spec):
 # ------------------------------------------------------------ contacts ----
 # CardDAV (vCard 3.0), same pattern as the CalDAV section above.
 
-def carddav_base(user):
-    return (NEXTCLOUD_URL.rstrip("/") + "/remote.php/dav/addressbooks/"
-            + str(user).split("@", 1)[0])
+_carddav_home = {}  # user -> working home URL (probed once)
+
+
+def carddav_home(creds):
+    """The user's addressbook-home URL (ending in "/"). Nextcloud 34
+    serves it under the principal path (…/dav/addressbooks/users/
+    <name>/); older versions directly (…/dav/addressbooks/<name>/).
+    Probe both once per user, cache the winner."""
+    name = str(creds[0]).split("@", 1)[0]
+    if name not in _carddav_home:
+        root = NEXTCLOUD_URL.rstrip("/") + "/remote.php/dav/addressbooks/"
+        body = ("<?xml version='1.0'?>"
+                "<d:propfind xmlns:d='DAV:'><prop xmlns:d='DAV:'>"
+                "<d:displayname/></prop></d:propfind>")
+        r = None
+        for cand in (root + "users/" + name + "/", root + name + "/"):
+            r = requests.request("PROPFIND", cand, auth=creds,
+                                 data=body.encode(),
+                                 headers={"Depth": "0",
+                                          "Content-Type": "text/xml"},
+                                 timeout=30)
+            _dbg(r, f"probe CardDAV home {cand}")
+            if r.status_code in (200, 207):
+                _carddav_home[name] = cand
+                break
+        if name not in _carddav_home:
+            raise RuntimeError(
+                f"addressbooks: HTTP {r.status_code} probing home")
+    return _carddav_home[name]
 
 
 def carddav_books(creds):
     """[{name, id}] of the real address books via PROPFIND Depth 1 on
-    the addressbook-home. Only entries whose resourcetype is a CardDAV
+    the addressbook home. Only entries whose resourcetype is a CardDAV
     address book count (the home set itself is not); match the
-    namespace prefix independently (<anything:addressbook>)."""
-    base = carddav_base(creds[0])
+    namespace prefix independently (<anything:addressbook>). Hidden
+    system books (id starting with 'z-') are skipped; a book without
+    display name falls back to its id."""
+    base = carddav_home(creds)
     prop = ("<prop xmlns:d='DAV:'>"
             "<d:displayname/><d:resourcetype/></prop>")
-    body = ("<?xml version='1.0'?"
+    body = ("<?xml version='1.0'?>"
             "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
     r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
                          headers={"Depth": "1", "Content-Type": "text/xml"},
@@ -666,10 +694,13 @@ def carddav_books(creds):
         url, blk = m.group(1), m.group(2)
         if not re.search(r"<\w+:addressbook[\s/>]", blk):
             continue  # the addressbook-home set itself, not a book
+        bid = unquote(url.rstrip("/").rsplit("/", 1)[-1]) \
+            if "/" in url else ""
+        if not bid or bid.startswith("z-"):
+            continue  # not a book / hidden system book
         dm = re.search(r"<d:displayname>([^<]*)</d:displayname>", blk)
-        out.append({"name": unescape(dm.group(1)).strip() if dm else "",
-                    "id": unquote(url.rstrip("/").rsplit("/", 1)[-1])
-                    if "/" in url else ""})
+        name = unescape(dm.group(1)).strip() if dm else ""
+        out.append({"name": name or bid, "id": bid})
     return out
 
 
@@ -824,14 +855,64 @@ def _spec_to_props(spec):
 
 
 def carddav_list(creds, abid, query=None):
-    """[{uri, fn, modified}] via PROPFIND Depth 1 (the answer includes
-    the book itself — filtered as a collection). query: case-
-    insensitive substring on the contact name, client-side."""
+    """[{uri, fn, modified}]. With a query: server-side CardDAV SEARCH
+    (REPORT addressbook-query, case-insensitive substring on FN); the
+    names of the matches come from the cards themselves (capped at 25,
+    a marker entry notes the rest) because Nextcloud does not expose
+    d:displayname in listings. Without a query: PROPFIND Depth 1 (the
+    answer includes the book itself — filtered as a collection); the
+    fn may be empty there — search with ?q= or GET the contact."""
     abid = carddav_resolve(creds, abid)
-    base = carddav_base(creds[0]) + "/" + abid
+    base = carddav_home(creds) + abid
+    if query:
+        q = (query.replace("&", "&amp;").replace("<", "&lt;")
+             .replace(">", "&gt;"))
+        body = ("<?xml version='1.0'?>"
+                "<c:addressbook-query "
+                "xmlns:d='DAV:' xmlns:c='urn:ietf:params:xml:ns:carddav'>"
+                "<d:prop><d:displayname/><d:getlastmodified/></d:prop>"
+                "<c:filter><c:prop-filter name='fn'>"
+                f"<c:text-match collation='i;ascii-casemap'>{q}"
+                "</c:text-match></c:prop-filter></c:filter>"
+                "</c:addressbook-query>")
+        r = requests.request("REPORT", base, auth=creds,
+                             data=body.encode(),
+                             headers={"Depth": "1",
+                                      "Content-Type": "text/xml"},
+                             timeout=30)
+        _dbg(r, f"REPORT contact search {abid} q={query!r}")
+        if r.status_code not in (200, 207):
+            raise RuntimeError(f"search contacts: HTTP {r.status_code}")
+        found = []
+        for m in re.finditer(
+                r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
+                r.text, re.S):
+            url, blk = m.group(1), m.group(2)
+            uri = unquote(url.rstrip("/").rsplit("/", 1)[-1])
+            if uri.lower().endswith(".vcf"):
+                uri = uri[:-4]
+            if not uri:
+                continue  # the book itself
+            gm = re.search(
+                r"<d:getlastmodified>([^<]*)</d:getlastmodified>", blk)
+            found.append((uri, gm.group(1) if gm else None))
+        out = []
+        for uri, modified in found[:25]:
+            fn = ""
+            r2 = requests.get(base + "/" + uri + ".vcf", auth=creds,
+                              timeout=30)
+            if r2.status_code == 200:
+                fn = _vcf_view(_vcf_parse(r2.text)).get("fn") or ""
+            out.append({"uri": uri, "fn": fn, "modified": modified})
+        if len(found) > 25:
+            out.append({"uri": "",
+                        "fn": f"… {len(found) - 25} more matches — "
+                              "narrow the query",
+                        "modified": None})
+        return out
     prop = ("<prop xmlns:d='DAV:'><d:displayname/><d:resourcetype/>"
             "<d:getlastmodified/></prop>")
-    body = ("<?xml version='1.0'?"
+    body = ("<?xml version='1.0'?>"
             "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
     r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
                          headers={"Depth": "1", "Content-Type": "text/xml"},
@@ -840,7 +921,6 @@ def carddav_list(creds, abid, query=None):
     if r.status_code not in (200, 207):
         raise RuntimeError(f"list contacts: HTTP {r.status_code}")
     out = []
-    q = (query or "").lower()
     for m in re.finditer(
             r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
             r.text, re.S):
@@ -852,7 +932,7 @@ def carddav_list(creds, abid, query=None):
         uri = unquote(url.rstrip("/").rsplit("/", 1)[-1])
         if uri.lower().endswith(".vcf"):
             uri = uri[:-4]
-        if not uri or (q and q not in fn.lower()):
+        if not uri:
             continue
         gm = re.search(r"<d:getlastmodified>([^<]*)</d:getlastmodified>",
                        blk)
@@ -865,7 +945,7 @@ def carddav_get(creds, abid, uri):
     """One contact, fully parsed (fn, name, org, title, email[], tel[],
     url[], bday, note, categories, uid, uri)."""
     abid = carddav_resolve(creds, abid)
-    r = requests.get(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+    r = requests.get(carddav_home(creds) + f"{abid}/{uri}.vcf",
                      auth=creds, timeout=30)
     _dbg(r, f"GET contact {abid}/{uri}")
     if r.status_code == 404:
@@ -884,7 +964,7 @@ def carddav_create(creds, abid, spec):
     if not str(spec.get("fn") or "").strip():
         raise ValueError("fn (display name) is required")
     props, uid = _spec_to_props(spec)
-    r = requests.put(f"{carddav_base(creds[0])}/{abid}/{uid}.vcf",
+    r = requests.put(carddav_home(creds) + f"{abid}/{uid}.vcf",
                      data=_vcf_lines(props).encode(), auth=creds,
                      headers={"Content-Type": "text/vcard"}, timeout=30)
     _dbg(r, f"PUT contact {abid}/{uid}")
@@ -899,7 +979,7 @@ def carddav_update(creds, abid, uri, spec):
     clears it), every omitted one keeps it. Unmodeled properties
     (photo etc.) survive. Returns the updated contact."""
     abid = carddav_resolve(creds, abid)
-    r = requests.get(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+    r = requests.get(carddav_home(creds) + f"{abid}/{uri}.vcf",
                      auth=creds, timeout=30)
     if r.status_code == 404:
         raise ContactNotFound(uri)
@@ -921,7 +1001,7 @@ def carddav_update(creds, abid, uri, spec):
                 if v:
                     props.append({"name": name, "params": {}, "value": v})
     _vcf_drop(props, "VERSION")  # rewritten by _vcf_lines
-    r = requests.put(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+    r = requests.put(carddav_home(creds) + f"{abid}/{uri}.vcf",
                      data=_vcf_lines(props).encode(), auth=creds,
                      headers={"Content-Type": "text/vcard"}, timeout=30)
     _dbg(r, f"PUT contact {abid}/{uri}")
@@ -932,7 +1012,7 @@ def carddav_update(creds, abid, uri, spec):
 
 def carddav_delete(creds, abid, uri):
     abid = carddav_resolve(creds, abid)
-    r = requests.delete(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+    r = requests.delete(carddav_home(creds) + f"{abid}/{uri}.vcf",
                         auth=creds, timeout=30)
     _dbg(r, f"DELETE contact {abid}/{uri}")
     if r.status_code not in (200, 204):

@@ -40,7 +40,8 @@ Change: same fields — given ones replace (null clears), omitted keep;
 Contacts (CardDAV), `<id>` = address book id or display name (same):
 
     GET    addressbooks                             list address books
-    GET    addressbooks/<id>?q=john   contacts (case-insens. name match)
+    GET    addressbooks/<id>          list contacts (fn may be empty)
+    GET    addressbooks/<id>?q=john   find by name (case-insens., has fn)
     GET    addressbooks/<id>/<uri>      full contact (fn, email, tel, ...)
     PUT    addressbooks/<id>             new contact (JSON)
     PUT    addressbooks/<id>/<uri>       change (JSON, partial)
