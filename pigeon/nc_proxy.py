@@ -1,8 +1,9 @@
-"""`/nc` — Pigeon acts as the room's Nextcloud proxy: files (WebDAV) and
-calendar (CalDAV). pi never sees the app password (it lives only in
-.room.json, outside the sandbox) — it gets a 24h room-scoped token
-(PIGEON_NC_TOKEN) that this endpoint verifies. The Nextcloud URL is
-not in pi's environment on purpose: the proxy is the only door.
+"""`/nc` — Pigeon acts as the room's Nextcloud proxy: files (WebDAV),
+calendar (CalDAV) and contacts (CardDAV). pi never sees the app
+password (it lives only in .room.json, outside the sandbox) — it gets
+a 24h room-scoped token (PIGEON_NC_TOKEN) that this endpoint verifies.
+The Nextcloud URL is not in pi's environment on purpose: the proxy is
+the only door.
 
   GET    /nc/<bot>/<room>/files?path=DIR        list a directory
   GET    /nc/<bot>/<room>/files?path=FILE&download=1   download (raw)
@@ -14,6 +15,12 @@ not in pi's environment on purpose: the proxy is the only door.
   PUT    /nc/<bot>/<room>/calendars/<calid>     new appointment (JSON)
   PUT    /nc/<bot>/<room>/calendars/<calid>/<uid>      change (JSON, partial)
   DELETE /nc/<bot>/<room>/calendars/<calid>/<uid>      delete (UID)
+  GET    /nc/<bot>/<room>/addressbooks          list address books
+  GET    /nc/<bot>/<room>/addressbooks/<abid>?q=   contacts (name, case-insens.)
+  GET    /nc/<bot>/<room>/addressbooks/<abid>/<uri>   full contact
+  PUT    /nc/<bot>/<room>/addressbooks/<abid>     new contact (JSON)
+  PUT    /nc/<bot>/<room>/addressbooks/<abid>/<uri>   change (JSON, partial)
+  DELETE /nc/<bot>/<room>/addressbooks/<abid>/<uri>   delete
 """
 
 import functools
@@ -25,10 +32,13 @@ import requests
 from flask import Blueprint, Response, jsonify, request
 
 from .config import BOTS_DIR, MAX_FILE_SIZE_MB, NEXTCLOUD_URL, log
-from .nextcloud import (EventNotFound, UnknownCalendar, _dbg, caldav_base,
+from .nextcloud import (ContactNotFound, EventNotFound, UnknownBook,
+                        UnknownCalendar, _dbg, caldav_base,
                         caldav_calendars, caldav_create, caldav_events,
                         caldav_get_event, caldav_resolve, caldav_update,
-                        dav_path, dav_prop)
+                        carddav_books, carddav_create, carddav_delete,
+                        carddav_get, carddav_list, carddav_update, dav_path,
+                        dav_prop)
 from .room import ROOM_DIR_RE, room_creds
 from .security import nc_verify
 
@@ -381,3 +391,126 @@ def calendar_delete(bot, room, calid, uid):
     if r.status_code not in (200, 204):
         return jsonify({"error": f"delete: HTTP {r.status_code}"}), 502
     return jsonify({"ok": True, "uid": uid})
+
+
+# ----------------------------------------------------- contacts (CardDAV) -
+
+def _book_unknown(e):
+    return jsonify({"error": str(e), "addressbooks": e.books}), 404
+
+
+@bp.get("/nc/<bot>/<room>/addressbooks")
+@logged
+def addressbooks(bot, room):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    try:
+        return jsonify({"addressbooks": carddav_books(creds)})
+    except Exception as e:
+        log.warning("nc addressbooks failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@bp.get("/nc/<bot>/<room>/addressbooks/<abid>")
+@logged
+def contacts(bot, room, abid):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not re.fullmatch(r"[^/?#&<>]{1,300}", abid):
+        return jsonify({"error": "bad address book id"}), 400
+    try:
+        return jsonify({"addressbook": abid,
+                        "contacts": carddav_list(creds, abid,
+                                                 request.args.get("q"))})
+    except UnknownBook as e:
+        return _book_unknown(e)
+    except Exception as e:
+        log.warning("nc contacts failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@bp.get("/nc/<bot>/<room>/addressbooks/<abid>/<uri>")
+@logged
+def contact_detail(bot, room, abid, uri):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", abid)
+            and re.fullmatch(r"[A-Za-z0-9._@-]{1,300}", uri)):
+        return jsonify({"error": "bad address book id or contact uri"}), 400
+    try:
+        return jsonify(carddav_get(creds, abid, uri))
+    except UnknownBook as e:
+        return _book_unknown(e)
+    except ContactNotFound as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        log.warning("nc contact detail failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+
+
+@bp.put("/nc/<bot>/<room>/addressbooks/<abid>")
+@logged
+def contact_create(bot, room, abid):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not re.fullmatch(r"[^/?#&<>]{1,300}", abid):
+        return jsonify({"error": "bad address book id"}), 400
+    spec = request.get_json(silent=True) or {}
+    if not str(spec.get("fn") or "").strip():
+        return jsonify({"error": "fn (display name) is required"}), 400
+    try:
+        uri = carddav_create(creds, abid, spec)
+    except UnknownBook as e:
+        return _book_unknown(e)
+    except Exception as e:
+        log.warning("nc contact create failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"ok": True, "uri": uri,
+                    "fn": str(spec["fn"]).strip()}), 201
+
+
+@bp.put("/nc/<bot>/<room>/addressbooks/<abid>/<uri>")
+@logged
+def contact_update(bot, room, abid, uri):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", abid)
+            and re.fullmatch(r"[A-Za-z0-9._@-]{1,300}", uri)):
+        return jsonify({"error": "bad address book id or contact uri"}), 400
+    spec = request.get_json(silent=True)
+    if not isinstance(spec, dict) or not spec:
+        return jsonify({"error": "JSON body required"}), 400
+    try:
+        contact = carddav_update(creds, abid, uri, spec)
+    except UnknownBook as e:
+        return _book_unknown(e)
+    except ContactNotFound as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        log.warning("nc contact update failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"ok": True, "uri": uri, "contact": contact})
+
+
+@bp.delete("/nc/<bot>/<room>/addressbooks/<abid>/<uri>")
+@logged
+def contact_delete(bot, room, abid, uri):
+    creds, err = _authorized(bot, room)
+    if err:
+        return err
+    if not (re.fullmatch(r"[^/?#&<>]{1,300}", abid)
+            and re.fullmatch(r"[A-Za-z0-9._@-]{1,300}", uri)):
+        return jsonify({"error": "bad address book id or contact uri"}), 400
+    try:
+        carddav_delete(creds, abid, uri)
+    except UnknownBook as e:
+        return _book_unknown(e)
+    except Exception as e:
+        log.warning("nc contact delete failed: %s", e)
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"ok": True, "uri": uri})

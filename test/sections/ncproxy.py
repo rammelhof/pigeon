@@ -213,6 +213,69 @@ def run():
           c == 404 and isinstance(e.get("calendars"), list),
           f"{c}: {e}")
     H.put_calls.clear()
+    # ------------------------------------------------- contacts (CardDAV)
+    c, e = http("/nc/bot1/ncx/addressbooks", headers=auth)
+    check("/nc lists address books", c == 200
+          and {(b["id"], b["name"]) for b in e["addressbooks"]}
+          == {("personal", "Personal"), ("business", "Business")},
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/personal", headers=auth)
+    check("/nc lists contacts of a book", c == 200
+          and [b["fn"] for b in e["contacts"]] == ["Jane Doe"]
+          and e["contacts"][0]["uri"] == "jane@acme"
+          and e["contacts"][0].get("modified"),
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/Personal?q=jane", headers=auth)
+    check("/nc contact search ?q= matches (case-insens. name)", c == 200
+          and [b["uri"] for b in e["contacts"]] == ["jane@acme"],
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/personal?q=zzz", headers=auth)
+    check("/nc contact search: no match -> empty", c == 200
+          and e["contacts"] == [], f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/personal/jane@acme",
+                headers=auth)
+    check("/nc full contact", c == 200
+          and e["fn"] == "Jane Doe" and e["org"] == "ACME"
+          and e["email"] == [{"value": "jane@acme.example",
+                              "type": ["WORK"]}]
+          and e["tel"] == [{"value": "+43 660 1234567",
+                            "type": ["CELL"]}]
+          and e["name"] == "Jane Doe",
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/personal/ghost", headers=auth)
+    check("/nc unknown contact: 404", c == 404, f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/business", method="PUT",
+                body=json.dumps({"fn": "Bob Lee", "org": "LG",
+                                 "email": "bob@lg.example",
+                                 "tel": ["+43 1 234"]}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc contact create", c == 201 and e.get("uri")
+          and e.get("fn") == "Bob Lee", f"{c}: {e}")
+    new_uri = e.get("uri") or ""
+    c, e = http(f"/nc/bot1/ncx/addressbooks/business/{new_uri}",
+                method="PUT",
+                body=json.dumps({"note": "vip", "tel": None}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc contact update (partial: note set, tel cleared)", c == 200
+          and e["contact"]["note"] == "vip"
+          and e["contact"]["fn"] == "Bob Lee"   # untouched field kept
+          and "tel" not in e["contact"],
+          f"{c}: {e}")
+    c, e = http(f"/nc/bot1/ncx/addressbooks/business/{new_uri}",
+                method="DELETE", headers=auth)
+    check("/nc contact delete", c == 200 and e.get("ok"), f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/business", headers=auth)
+    check("/nc book empty after delete", c == 200
+          and e["contacts"] == [], f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/nope", headers=auth)
+    check("/nc unknown book: 404 + book list",
+          c == 404 and isinstance(e.get("addressbooks"), list),
+          f"{c}: {e}")
+    c, e = http("/nc/bot1/ncx/addressbooks/business", method="PUT",
+                body=json.dumps({"org": "no fn"}),
+                headers={**auth, "Content-Type": "application/json"})
+    check("/nc contact create without fn: 400", c == 400, f"{c}: {e}")
+    H.put_calls.clear()
     # token is room-scoped: the same token must not open another room
     s, body = signed_webhook("bot1", new_payload("!pw ncuser ncpw123",
                                                  room_token="othrm001",

@@ -4,7 +4,7 @@ import logging
 import os
 
 # build/version info (PIGEON_COMMIT is set by the Dockerfile build arg)
-VERSION = "1.0.17"
+VERSION = "1.0.18"
 COMMIT = os.environ.get("PIGEON_COMMIT", "unknown")
 
 NEXTCLOUD_URL = os.environ.get("NEXTCLOUD_URL", "").rstrip("/")

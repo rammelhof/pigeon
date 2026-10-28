@@ -633,3 +633,308 @@ def caldav_update(creds, calid, uid, spec):
         if r.status_code not in (200, 201, 204):
             raise RuntimeError(f"update: HTTP {r.status_code}")
     return {k: v for k, v in ev.items() if not k.startswith("_")}, target
+
+
+# ------------------------------------------------------------ contacts ----
+# CardDAV (vCard 3.0), same pattern as the CalDAV section above.
+
+def carddav_base(user):
+    return (NEXTCLOUD_URL.rstrip("/") + "/remote.php/dav/addressbooks/"
+            + str(user).split("@", 1)[0])
+
+
+def carddav_books(creds):
+    """[{name, id}] of the real address books via PROPFIND Depth 1 on
+    the addressbook-home. Only entries whose resourcetype is a CardDAV
+    address book count (the home set itself is not); match the
+    namespace prefix independently (<anything:addressbook>)."""
+    base = carddav_base(creds[0])
+    prop = ("<prop xmlns:d='DAV:'>"
+            "<d:displayname/><d:resourcetype/></prop>")
+    body = ("<?xml version='1.0'?"
+            "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
+    r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
+                         headers={"Depth": "1", "Content-Type": "text/xml"},
+                         timeout=30)
+    _dbg(r, f"PROPFIND {base}")
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"addressbooks: HTTP {r.status_code}")
+    out = []
+    for m in re.finditer(
+            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
+            r.text, re.S):
+        url, blk = m.group(1), m.group(2)
+        if not re.search(r"<\w+:addressbook[\s/>]", blk):
+            continue  # the addressbook-home set itself, not a book
+        dm = re.search(r"<d:displayname>([^<]*)</d:displayname>", blk)
+        out.append({"name": unescape(dm.group(1)).strip() if dm else "",
+                    "id": unquote(url.rstrip("/").rsplit("/", 1)[-1])
+                    if "/" in url else ""})
+    return out
+
+
+def carddav_resolve(creds, abid):
+    """abid (id or name, case-insensitive) -> the real book id. Raises
+    UnknownBook (with the full list) on no match."""
+    books = carddav_books(creds)
+    low = abid.lower()
+    for b in books:
+        if low in (b["id"].lower(), b["name"].lower()):
+            return b["id"]
+    raise UnknownBook(abid, books)
+
+
+class UnknownBook(RuntimeError):
+    """abid matches no address book; .books is the full [{name, id}]."""
+
+    def __init__(self, abid, books):
+        self.abid = abid
+        self.books = books
+        names = ", ".join(f"{b['name']} ({b['id']})" for b in books)
+        super().__init__(f"unknown address book {abid!r}; "
+                         f"available: {names}")
+
+
+class ContactNotFound(RuntimeError):
+    """The address book has no contact with the given uri."""
+
+
+def _vcf_unescape(v):
+    return _ics_unescape(v)  # same escape set (RFC 6350 3.2.10)
+
+
+def _vcf_escape(v):
+    return _ics_escape(v)
+
+
+def _vcf_unfold(text):
+    """Undo RFC 6350 line folding: a line starting with space/tab
+    continues the previous one."""
+    return re.sub(r"\r?\n[ \t]", "", text)
+
+
+def _vcf_parse(text):
+    """vCard text -> ordered list of {name, params, value}; params like
+    TYPE=a,b are split into lists. Unmodeled properties (PHOTO, X-*)
+    are kept, so updates do not destroy them."""
+    out = []
+    for line in _vcf_unfold(text).splitlines():
+        line = line.strip()
+        if not line or line in ("BEGIN:VCARD", "END:VCARD"):
+            continue
+        head, _, value = line.partition(":")
+        name, _, extra = head.partition(";")
+        params = {}
+        for part in extra.split(";"):
+            k, _, v = part.partition("=")
+            k = k.strip().upper()
+            vals = [x.strip() for x in v.split(",") if x.strip()]
+            if k in params:
+                params[k] = (params[k] if isinstance(params[k], list)
+                             else [params[k]]) + vals
+            else:
+                params[k] = vals
+        out.append({"name": name.upper(), "params": params,
+                    "value": value.strip()})
+    return out
+
+
+def _vcf_lines(props):
+    """props (as from _vcf_parse) -> vCard 3.0 text."""
+    lines = ["BEGIN:VCARD", "VERSION:3.0"]
+    for p in props:
+        if p["name"] == "VERSION":
+            continue
+        params = ""
+        for k in sorted(p["params"]):
+            v = p["params"][k]
+            params += ";" + k + "=" + (",".join(v) if isinstance(v, list)
+                                       else str(v))
+        lines.append(p["name"] + params + ":"
+                     + (_vcf_escape(p["value"])
+                        if p["name"] not in ("VERSION", "UID")
+                        else p["value"]))
+    return "\r\n".join(lines + ["END:VCARD"]) + "\r\n"
+
+
+def _vcf_view(props):
+    """props -> the JSON contact (only fields that have a value)."""
+    def single(name):
+        for p in props:
+            if p["name"] == name and p["value"].strip():
+                return _vcf_unescape(p["value"].strip())
+        return None
+
+    def multi(name):
+        return [{"value": _vcf_unescape(p["value"].strip()),
+                 "type": p["params"].get("TYPE")}
+                for p in props if p["name"] == name and p["value"].strip()]
+
+    out = {"uri": None}
+    for key, name in (("fn", "FN"), ("org", "ORG"), ("title", "TITLE"),
+                      ("note", "NOTE"), ("bday", "BDAY"), ("uid", "UID")):
+        v = single(name)
+        if v is not None:
+            out[key] = v
+    for p in props:  # N:family;given;... -> "given family"
+        if p["name"] == "N":
+            parts = [_vcf_unescape(x).strip() for x in p["value"].split(";")]
+            given = parts[1] if len(parts) > 1 else ""
+            family = parts[0] if parts else ""
+            if given or family:
+                out["name"] = (given + " " + family).strip()
+            break
+    for key, name in (("email", "EMAIL"), ("tel", "TEL"), ("url", "URL")):
+        v = multi(name)
+        if v:
+            out[key] = v
+    cats = single("CATEGORIES")
+    if cats:
+        out["categories"] = [c.strip() for c in cats.split(",") if c.strip()]
+    return out
+
+
+def _as_list(v):
+    if v is None:
+        return []
+    return v if isinstance(v, list) else [v]
+
+
+def _vcf_drop(props, name):
+    props[:] = [p for p in props if p["name"] != name]
+
+
+def _spec_to_props(spec):
+    """create spec -> (vCard 3.0 props, uid); UID is generated."""
+    uid = uuid.uuid4().hex
+    props = [{"name": "UID", "params": {}, "value": uid},
+             {"name": "FN", "params": {},
+              "value": str(spec.get("fn") or "").strip()}]
+    for key, name in (("org", "ORG"), ("title", "TITLE"), ("note", "NOTE"),
+                      ("bday", "BDAY")):
+        if spec.get(key):
+            props.append({"name": name, "params": {},
+                          "value": str(spec[key]).strip()})
+    for key, name in (("email", "EMAIL"), ("tel", "TEL"), ("url", "URL")):
+        for v in _as_list(spec.get(key)):
+            v = str(v).strip()
+            if v:
+                props.append({"name": name, "params": {}, "value": v})
+    return props, uid
+
+
+def carddav_list(creds, abid, query=None):
+    """[{uri, fn, modified}] via PROPFIND Depth 1 (the answer includes
+    the book itself — filtered as a collection). query: case-
+    insensitive substring on the contact name, client-side."""
+    abid = carddav_resolve(creds, abid)
+    base = carddav_base(creds[0]) + "/" + abid
+    prop = ("<prop xmlns:d='DAV:'><d:displayname/><d:resourcetype/>"
+            "<d:getlastmodified/></prop>")
+    body = ("<?xml version='1.0'?"
+            "<d:propfind xmlns:d='DAV:'>" + prop + "</d:propfind>")
+    r = requests.request("PROPFIND", base, auth=creds, data=body.encode(),
+                         headers={"Depth": "1", "Content-Type": "text/xml"},
+                         timeout=30)
+    _dbg(r, f"PROPFIND {base}")
+    if r.status_code not in (200, 207):
+        raise RuntimeError(f"list contacts: HTTP {r.status_code}")
+    out = []
+    q = (query or "").lower()
+    for m in re.finditer(
+            r"<d:response>\s*<d:href>([^<]+)</d:href>(.*?)</d:response>",
+            r.text, re.S):
+        url, blk = m.group(1), m.group(2)
+        if re.search(r"<\w+:collection[\s/>]", blk):
+            continue  # the book itself (Depth 1 includes it)
+        dm = re.search(r"<d:displayname>([^<]*)</d:displayname>", blk)
+        fn = unescape(dm.group(1)).strip() if dm else ""
+        uri = unquote(url.rstrip("/").rsplit("/", 1)[-1])
+        if uri.lower().endswith(".vcf"):
+            uri = uri[:-4]
+        if not uri or (q and q not in fn.lower()):
+            continue
+        gm = re.search(r"<d:getlastmodified>([^<]*)</d:getlastmodified>",
+                       blk)
+        out.append({"uri": uri, "fn": fn,
+                    "modified": gm.group(1) if gm else None})
+    return out
+
+
+def carddav_get(creds, abid, uri):
+    """One contact, fully parsed (fn, name, org, title, email[], tel[],
+    url[], bday, note, categories, uid, uri)."""
+    abid = carddav_resolve(creds, abid)
+    r = requests.get(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+                     auth=creds, timeout=30)
+    _dbg(r, f"GET contact {abid}/{uri}")
+    if r.status_code == 404:
+        raise ContactNotFound(uri)
+    if r.status_code >= 400:
+        raise RuntimeError(f"get contact: HTTP {r.status_code}")
+    out = _vcf_view(_vcf_parse(r.text))
+    out["uri"] = uri
+    return out
+
+
+def carddav_create(creds, abid, spec):
+    """spec (JSON: fn required; org/title/note/bday; email/tel/url as
+    string or list) -> new vCard PUT. Returns the contact uri."""
+    abid = carddav_resolve(creds, abid)
+    if not str(spec.get("fn") or "").strip():
+        raise ValueError("fn (display name) is required")
+    props, uid = _spec_to_props(spec)
+    r = requests.put(f"{carddav_base(creds[0])}/{abid}/{uid}.vcf",
+                     data=_vcf_lines(props).encode(), auth=creds,
+                     headers={"Content-Type": "text/vcard"}, timeout=30)
+    _dbg(r, f"PUT contact {abid}/{uid}")
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"create contact: HTTP {r.status_code}")
+    return uid
+
+
+def carddav_update(creds, abid, uri, spec):
+    """Change a contact: {fn?, org?, title?, note?, bday?, email?,
+    tel?, url?} — every given field replaces the current one (null
+    clears it), every omitted one keeps it. Unmodeled properties
+    (photo etc.) survive. Returns the updated contact."""
+    abid = carddav_resolve(creds, abid)
+    r = requests.get(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+                     auth=creds, timeout=30)
+    if r.status_code == 404:
+        raise ContactNotFound(uri)
+    if r.status_code >= 400:
+        raise RuntimeError(f"get contact: HTTP {r.status_code}")
+    props = _vcf_parse(r.text)
+    for key, name in (("fn", "FN"), ("org", "ORG"), ("title", "TITLE"),
+                      ("note", "NOTE"), ("bday", "BDAY")):
+        if key in spec:
+            _vcf_drop(props, name)
+            if spec[key]:
+                props.append({"name": name, "params": {},
+                              "value": str(spec[key]).strip()})
+    for key, name in (("email", "EMAIL"), ("tel", "TEL"), ("url", "URL")):
+        if key in spec:
+            _vcf_drop(props, name)
+            for v in _as_list(spec[key]):
+                v = str(v).strip()
+                if v:
+                    props.append({"name": name, "params": {}, "value": v})
+    _vcf_drop(props, "VERSION")  # rewritten by _vcf_lines
+    r = requests.put(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+                     data=_vcf_lines(props).encode(), auth=creds,
+                     headers={"Content-Type": "text/vcard"}, timeout=30)
+    _dbg(r, f"PUT contact {abid}/{uri}")
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"update contact: HTTP {r.status_code}")
+    return carddav_get(creds, abid, uri)
+
+
+def carddav_delete(creds, abid, uri):
+    abid = carddav_resolve(creds, abid)
+    r = requests.delete(f"{carddav_base(creds[0])}/{abid}/{uri}.vcf",
+                        auth=creds, timeout=30)
+    _dbg(r, f"DELETE contact {abid}/{uri}")
+    if r.status_code not in (200, 204):
+        raise RuntimeError(f"delete contact: HTTP {r.status_code}")
+    return uri

@@ -28,6 +28,22 @@ class H(BaseHTTPRequestHandler):
     events = {"family": [{"uid": "ev1", "summary": "Old thing",
                           "start": "2000-01-01T08:00:00+01:00"}],
                "work": [], "privat": [], "Privat (2)": []}
+    # CardDAV: address books {id: display name}, contacts {book: {uri: vcf}}
+    addressbooks = {"personal": "Personal", "business": "Business"}
+    contacts = {"personal": {
+                    "jane@acme": ("BEGIN:VCARD\r\nVERSION:3.0\r\n"
+                                  "UID:jane@acme\r\nFN:Jane Doe\r\n"
+                                  "N:Doe;Jane;;;\r\nORG:ACME\r\n"
+                                  "TEL;TYPE=CELL:+43 660 1234567\r\n"
+                                  "EMAIL;TYPE=WORK:jane@acme.example\r\n"
+                                  "END:VCARD\r\n")},
+                 "business": {}}
+
+    @staticmethod
+    def _vcf_fn(vcf):
+        m = re.search(r"^FN:([^\r\n]*)",
+                      re.sub(r"\r?\n[ \t]", "", vcf), re.M)
+        return m.group(1).strip() if m else ""
 
     @staticmethod
     def _unesc(v):
@@ -250,6 +266,27 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
+        if self.path.startswith("/remote.php/dav/addressbooks/"):
+            if not self._dav_ok():
+                self._json({"error": "unauthorized"}, code=401)
+                return
+            H.put_calls.append(("GET", self.path))
+            parts = self.path.rstrip("/").split("/")
+            if len(parts) == 7:  # one contact: <user>/<book>/<uri>.vcf
+                vcf = H.contacts.get(parts[5], {}).get(
+                    parts[6].replace(".vcf", ""))
+                if vcf is None:
+                    self._xml_error(f'File with name {parts[6]}'
+                                    ' could not be located')
+                    return
+                raw = vcf.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/vcard")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._json({"error": "unexpected"}, code=400)
         self._json({"ok": True})
 
     def do_SEARCH(self):
@@ -345,6 +382,62 @@ class H(BaseHTTPRequestHandler):
                            '</d:propstat></d:response>'
                            for e in H.events.get(cal, []))
                        + "</d:multistatus>")
+        elif self.path.startswith("/remote.php/dav/addressbooks/"):
+            # /remote.php/dav/addressbooks/<user>          -> principal
+            # /remote.php/dav/addressbooks/<user>/<book>/  -> one book
+            parts = self.path.rstrip("/").split("/")
+            if len(parts) == 5:
+                # Depth-1 on the principal: the addressbook-home set
+                # (resourcetype addressbook-home-set, NOT a book — the
+                # client must filter it) + one response per book.
+                xml = ('<d:multistatus xmlns:d="DAV:" '
+                       'xmlns:crd="urn:ietf:params:xml:ns:carddav">'
+                       '<d:response><d:href>/remote.php/dav/'
+                       'addressbooks/u/</d:href><d:propstat><d:prop>'
+                       '<d:displayname>u</d:displayname>'
+                       '<d:resourcetype><d:collection/>'
+                       '<crd:addressbook-home-set/></d:resourcetype>'
+                       '</d:prop><d:status>HTTP/1.1 200 OK</d:status>'
+                       '</d:propstat></d:response>'
+                       + "".join(
+                           f"<d:response><d:href>/remote.php/dav/"
+                           f"addressbooks/u/{b}/</d:href>"
+                           '<d:propstat><d:prop>'
+                           f"<d:displayname>{n}</d:displayname>"
+                           '<d:resourcetype><d:collection/>'
+                           '<crd:addressbook/></d:resourcetype>'
+                           '<d:status>HTTP/1.1 200 OK</d:status>'
+                           '</d:propstat></d:response>'
+                           for b, n in H.addressbooks.items())
+                       + "</d:multistatus>")
+            else:
+                book = parts[-1]
+                # Depth-1 on one book: the book itself (a collection —
+                # the client filters it) + one response per contact
+                # (displayname = FN, no resourcetype).
+                resp = (f"<d:response><d:href>/remote.php/dav/"
+                        f"addressbooks/u/{book}/</d:href>"
+                        '<d:propstat><d:prop>'
+                        f"<d:displayname>"
+                        f"{H.addressbooks.get(book, '')}</d:displayname>"
+                        '<d:resourcetype><d:collection/>'
+                        '<crd:addressbook/></d:resourcetype>'
+                        '<d:status>HTTP/1.1 200 OK</d:status>'
+                        '</d:propstat></d:response>')
+                for uri, vcf in H.contacts.get(book, {}).items():
+                    resp += (f"<d:response><d:href>/remote.php/dav/"
+                             f"addressbooks/u/{book}/{uri}.vcf</d:href>"
+                             '<d:propstat><d:prop>'
+                             f"<d:displayname>"
+                             f"{H._vcf_fn(vcf)}</d:displayname>"
+                             '<d:getlastmodified>'
+                             'Tue, 01 Jan 2026 00:00:00 GMT'
+                             '</d:getlastmodified>'
+                             '<d:status>HTTP/1.1 200 OK</d:status>'
+                             '</d:propstat></d:response>')
+                xml = ('<d:multistatus xmlns:d="DAV:" '
+                       'xmlns:crd="urn:ietf:params:xml:ns:carddav">'
+                       + resp + "</d:multistatus>")
         else:  # webdav dir listing: direct children (files + folders)
             root = self.path[len("/remote.php/webdav/"):].rstrip("/")
             under = [p for p in sorted(H.files)
@@ -410,6 +503,12 @@ class H(BaseHTTPRequestHandler):
             lst.append(ev)
             self.send_response(201)
             self.end_headers()
+        elif self.path.startswith("/remote.php/dav/addressbooks/"):
+            parts = self.path.rstrip("/").split("/")
+            book, uri = parts[5], parts[6].replace(".vcf", "")
+            H.contacts.setdefault(book, {})[uri] = data.decode("utf-8")
+            self.send_response(201)
+            self.end_headers()
         else:
             self._json({"ok": True}, code=204)
 
@@ -425,6 +524,10 @@ class H(BaseHTTPRequestHandler):
             cal, uid = parts[-2], parts[-1].replace(".ics", "")
             H.events[cal] = [e for e in H.events.get(cal, [])
                              if e["uid"] != uid]
+        elif self.path.startswith("/remote.php/dav/addressbooks/"):
+            parts = self.path.rstrip("/").split("/")
+            H.contacts.get(parts[5], {}).pop(parts[6].replace(".vcf", ""),
+                                             None)
         self._json({"ok": True}, code=204)
 
     def do_POST(self):
