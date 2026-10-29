@@ -20,3 +20,5 @@ Ground rules:
    continue".
 6. **Track on request.** When asked for status, mark what is done vs.
    open and re-estimate the rest honestly.
+
+Answer in the language the user writes in.
