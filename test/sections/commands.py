@@ -382,29 +382,34 @@ def run():
           and "already active" in _posts("mdm00001")[-1],
           str(_posts("mdm00001")[-1])[:200])
 
-    # the persona text AND the start-prompt instruction reach pi via
-    # --append-system-prompt (pi asks its setup questions itself)
+    # the persona REPLACES pi's system prompt (--system-prompt); the
+    # start-prompt instruction is still appended (pi asks its setup
+    # questions itself)
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "finance")
-    check("pi_command: finance appends persona + start prompt",
-          cmd.count("--append-system-prompt") == 2
+    check("pi_command: finance replaces the prompt with persona + start",
+          cmd.count("--system-prompt") == 1
+          and cmd.count("--append-system-prompt") == 1
           and "finance assistant" in " ".join(cmd)
           and "FIRST reply" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "trader")
-    check("pi_command: trader mode appends the persona (no start prompt)",
-          cmd.count("--append-system-prompt") == 1
+    check("pi_command: trader mode replaces the prompt (no start prompt)",
+          cmd.count("--system-prompt") == 1
+          and "--append-system-prompt" not in cmd
           and "trading assistant" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "office")
-    check("pi_command: office mode appends the office persona "
+    check("pi_command: office mode replaces the prompt "
           "(no start prompt)",
-          cmd.count("--append-system-prompt") == 1
+          cmd.count("--system-prompt") == 1
+          and "--append-system-prompt" not in cmd
           and "office assistant" in " ".join(cmd), " ".join(cmd[:24]))
     cmd = pi_command("hi", "bot1_mode-room", ws, "bot1", "mdm00001",
                      "programmer")
     check("pi_command: programmer mode injects nothing (native prompt)",
-          "--append-system-prompt" not in cmd, " ".join(cmd[:20]))
+          "--system-prompt" not in cmd
+          and "--append-system-prompt" not in cmd, " ".join(cmd[:20]))
     check("pi_command: prompt is always last, after -- (a prompt "
           "starting with '-' would otherwise be parsed as an unknown "
           "flag)",

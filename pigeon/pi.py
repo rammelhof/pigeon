@@ -28,14 +28,18 @@ def pi_command(prompt, session_id, cwd, bot, room, mode=""):
     or creates it (first message of a new room). The working directory is
     the room's workspace/ subfolder; when SANDBOX is on and bwrap exists,
     the whole run is wrapped in a bubblewrap sandbox (full network).
-    A persona mode (pigeon/modes/<mode>.md) is appended to pi's system
-    prompt; mode='' uses pi's native prompt. A mode's start prompt
-    (<mode>_start_prompt.md) is appended as well — it instructs pi to
-    ask for its setup details in the first reply of a fresh session."""
+    A persona mode (pigeon/modes/<mode>.md) REPLACES pi's default
+    system prompt; mode='' uses pi's native prompt. A mode's start
+    prompt (<mode>_start_prompt.md) is appended as well — it instructs
+    pi to ask for its setup details in the first reply of a fresh
+    session."""
     pi = [PI_BIN, "--mode", "json", "--session-id", session_id]
     text = mode_text(mode)
     if text:
-        pi += ["--append-system-prompt", text]
+        # replaces pi's default (coding-agent) system prompt entirely —
+        # the persona must be self-contained; mode='' keeps pi's native
+        # prompt
+        pi += ["--system-prompt", text]
     start = mode_start_prompt(mode)
     if start:
         pi += ["--append-system-prompt", start]

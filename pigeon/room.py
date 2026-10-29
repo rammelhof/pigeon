@@ -309,13 +309,13 @@ def strip_mention(message, bot_name):
 
 
 # ------------------------------------------------------------ persona ----
-# A persona is one .md file in pigeon/modes/; its text is appended to
-# pi's system prompt for every run of the room (pi's --append-system-
-# prompt). "programmer" (no file) means pi's native prompt. A mode can
-# carry a start prompt (<name>_start_prompt.md) that pigeon posts when
-# the mode is entered or the session is cleared (it asks the user for
-# context the persona needs, e.g. the finance country). DEFAULT_MODE is
-# what new rooms use.
+# A persona is one .md file in pigeon/modes/; its text REPLACES pi's
+# default system prompt for every run of the room (pi's --system-
+# prompt, so the persona is self-contained and does not sound like a
+# coding agent). "programmer" (no file) means pi's native prompt. A
+# mode can carry a start prompt (<name>_start_prompt.md) that pi
+# follows on a fresh session (it asks the user for context the persona
+# needs, e.g. the finance country). DEFAULT_MODE is what new rooms use.
 # The active mode lives in .room.json ("mode"), like the other room
 # settings — it survives !clean, is gone with the room on bot leave.
 
@@ -369,8 +369,8 @@ def set_room_mode(cwd, mode):
 
 
 def mode_text(mode):
-    """The text to append to pi's system prompt for a mode, or None for
-    programmer/empty/unknown names."""
+    """The text that replaces pi's system prompt for a mode, or None
+    for programmer/empty/unknown names."""
     if not mode or not MODE_NAME_RE.fullmatch(mode):
         return None
     path = os.path.join(MODES_DIR, mode + ".md")
@@ -381,9 +381,10 @@ def mode_text(mode):
 
 
 def mode_start_prompt(mode):
-    """The mode's start-prompt text — an instruction appended to pi's
-    system prompt telling it to ask for its setup details (country,
-    language, ...) in the first reply of a fresh session — or None."""
+    """The mode's start-prompt text — an instruction appended to the
+    persona system prompt telling it to ask for its setup details
+    (country, language, ...) in the first reply of a fresh session —
+    or None."""
     if not mode or not MODE_NAME_RE.fullmatch(mode):
         return None
     path = os.path.join(MODES_DIR, mode + START_PROMPT_SUFFIX + ".md")

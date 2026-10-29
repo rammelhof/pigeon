@@ -134,8 +134,9 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   per entry); `!mention on|off|status` (aliases `!m …`) makes pigeon
   only react to messages that mention it as @<bot name> or @bot (the
   mention is stripped); `!mode [name]` switches the room's persona (a switch starts a fresh pi
-  session) — all from the .md personas in `pigeon/modes/` appended to
-  pi's system prompt: `programmer` (pi's native prompt), `office`
+  session) — all from the .md personas in `pigeon/modes/`, which
+  **replace** pi's default (coding-agent) system prompt: `programmer`
+  (no persona — pi's native prompt), `office`
   (default for all rooms), `finance` (invoicing/payroll/accounting —
   never assumes a business setup; its start prompt makes pi ask country
   + language in the first reply of a fresh session), `trader` (stock &
@@ -338,10 +339,10 @@ pigeon/
   room.py         room folders, .room.json (token + app password +
                   mention gate + persona mode), folder disambiguation,
                   !pw, !clean, !thinking (last-thinking.md), join/leave
-  modes/          persona prompts + start-prompt instructions appended to pi's system prompt (!mode)
+  modes/          persona prompts (replace pi's system prompt) + start-prompt instructions (!mode)
   nextcloud.py    bot API posting, WebDAV/CalDAV client
   pi.py           pi config check, bubblewrap sandbox, JSONL run,
-                  --append-system-prompt persona injection
+                  --system-prompt persona injection
   tasks.py        per-room queues + workers, retries, heartbeat, !stop
   indicator.py    silent progress-ack post when pi starts
   scheduler.py    schedules.json time math + tick + !schedule command
