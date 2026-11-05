@@ -322,6 +322,7 @@ def strip_mention(message, bot_name):
 MODE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}")
 MODE_CMD_RE = re.compile(r"^!mode(?:\s+(\S+))?\s*$")
 PROGRAMMER_MODE = "programmer"      # native pi prompt, no persona file
+TRANSCRIBE_MODE = "transcribe"      # audio->text pipe: no pi at all
 START_PROMPT_SUFFIX = "_start_prompt"
 
 
@@ -349,8 +350,9 @@ def list_modes():
 
 
 def mode_names():
-    """All settable mode names: programmer first, then the file modes."""
-    return [PROGRAMMER_MODE] + [n for n, _ in list_modes()]
+    """All settable mode names: programmer, transcribe, then the files."""
+    return ([PROGRAMMER_MODE, TRANSCRIBE_MODE]
+            + [n for n, _ in list_modes()])
 
 
 def room_mode(cwd):
@@ -410,7 +412,9 @@ def handle_mode_command(message, cwd):
     if arg in ("list", "status"):
         cur = room_mode(cwd)
         lines = ["- {} \u2014 pi's native programmer prompt (no persona)"
-                 .format(PROGRAMMER_MODE)]
+                 .format(PROGRAMMER_MODE),
+                 "- {} \u2014 audio\u2192text pipe: mp3/wav are transcribed "
+                 "and posted, no pi".format(TRANSCRIBE_MODE)]
         lines += ["- {}{} \u2014 {}".format(
                       n, " (default)" if n == DEFAULT_MODE else "", d)
                   for n, d in list_modes()]
@@ -428,8 +432,11 @@ def handle_mode_command(message, cwd):
         reply = ("Mode: {} \u2014 pi's native programmer prompt.{}"
                  .format(PROGRAMMER_MODE, fresh)
                  if arg == PROGRAMMER_MODE else
-                 "Mode: {} \u2014 the persona applies from the next "
-                 "message.{}".format(arg, fresh))
+                 ("Mode: {} \u2014 I only transcribe mp3/wav files and "
+                  "post the text (no pi).{}".format(TRANSCRIBE_MODE, fresh)
+                  if arg == TRANSCRIBE_MODE else
+                  "Mode: {} \u2014 the persona applies from the next "
+                  "message.{}".format(arg, fresh)))
         return reply
     return ("Unknown mode \u2018{}\u2019. Available: {}".format(
         arg, ", ".join(names)))

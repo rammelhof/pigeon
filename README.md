@@ -147,7 +147,10 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   specific, no padding), `writer` (DE/EN texts, complete copy-ready
   drafts, no filler), `researcher` (deep dives with dated sources,
   confidence per claim) and `planner` (messy to-dos → structured plan,
-  realistic estimates, calendar checks). A mode's `<name>_start_prompt.md` is an instruction appended
+  realistic estimates, calendar checks). `transcribe` is a pipe, not a
+  persona: the room only transcribes mp3/wav files (STT endpoint, posted
+  as `👂 text`) and never runs pi — text messages get a hint instead.
+  A mode's `<name>_start_prompt.md` is an instruction appended
   to pi's system prompt so **pi itself generates** the setup questions
   (on mode switch and after `!clean`) rather than pigeon posting a
   static message; `!memory` shows the room's long-term memory

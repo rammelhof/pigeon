@@ -27,8 +27,8 @@ from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    handle_mode_command, handle_pw_command,
                    handle_status_command,
                    handle_thinking_command, room_creds,
-                   room_dir, room_meta_read, strip_mention,
-                   write_room_token)
+                   room_dir, room_meta_read, room_mode, strip_mention,
+                   TRANSCRIBE_MODE, write_room_token)
 from .security import verify_webhook_signature
 
 app = Flask(__name__)
@@ -240,6 +240,14 @@ def webhook(bot):
         post_message(room, f"pigeon {VERSION} ({COMMIT})")
         return jsonify({"handled": "!version"}), 200
 
+    # transcribe mode: pure audio->text pipe — mp3/wav are handled above
+    # (transcribed + posted, never queued); everything else gets a hint
+    if room_mode(cwd) == TRANSCRIBE_MODE:
+        post_message(room, "\U0001f4dd This room is in transcribe mode — "
+                           "send mp3/wav files and I'll post the text. "
+                           "(!mode office to change)")
+        return jsonify({"ignored": "transcribe mode"}), 200
+
     # mention mode: when on, only messages that mention the bot
     # (@<bot name> or @bot) reach pi (the mention is stripped first) —
     # the commands above always work
@@ -287,6 +295,7 @@ def handle_voice_message(bot, folder, room, f, cwd, sender):
     """Voice message (audio/wav, audio/mpeg): download the file, transcribe
     it with the configured STT endpoint (.pigeon.json in the bots folder),
     post the extracted text back to the room and queue that text for pi.
+    In transcribe mode the posted text is the final answer (no pi).
     Any failure is reported in the chat — pi never sees the raw audio."""
     name = f.get("name") or "voice message"
     os.makedirs(cwd, exist_ok=True)
@@ -328,6 +337,14 @@ def handle_voice_message(bot, folder, room, f, cwd, sender):
         return jsonify({"error": "transcription failed"}), 502
 
     post_message(room, "\U0001f442 " + text)
+
+    # transcribe mode: the transcription IS the answer — post it and stop,
+    # no pi run, no indicator
+    if room_mode(cwd) == TRANSCRIBE_MODE:
+        log.info("voice message transcribed in %s/%s (%d chars, no pi)",
+                 bot, folder, len(text))
+        return jsonify({"transcribed": True, "queued": False}), 200
+
     key = f"{bot}/{folder}"
     ind = indicator.Indicator(room)
     tasks.enqueue(key, bot, {

@@ -100,3 +100,79 @@ def run():
           f"{s} {body} {nc_stub.H.stt_calls}")
     t = wait_room_done("bot1/rooms/voice-room", min_count=2)
     check("mp3 task done", bool(t) and t["status"] == "done", str(t))
+
+    # --- transcribe mode: pure audio->text pipe, no pi -------------------
+
+    def _pi_runs():
+        return len([c for c, p in FakePopen._seen
+                    if c.replace("\\", "/").endswith(
+                        "bot1/rooms/voice-room/workspace")])
+
+    s, body = signed_webhook("bot1", new_payload("!mode transcribe",
+                                                 room_token="voicerm001",
+                                                 room_name="Voice Room"))
+    voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
+    check("!mode transcribe switches the room",
+          s == 200 and body.get("handled") == "!mode"
+          and voic_posts[-1].startswith("Mode: transcribe"),
+          str(body) + str(voic_posts[-1:]))
+    n_pi, n_stt = _pi_runs(), len(nc_stub.H.stt_calls)
+
+    s, body = signed_webhook("bot1", new_payload("hello there",
+                                                 room_token="voicerm001",
+                                                 room_name="Voice Room"))
+    voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
+    check("text in transcribe mode: hint posted, nothing queued",
+          s == 200 and body.get("ignored") == "transcribe mode"
+          and "transcribe mode" in voic_posts[-1]
+          and "!mode office" in voic_posts[-1]
+          and len(nc_stub.H.stt_calls) == n_stt,
+          str(body) + str(voic_posts[-1:]))
+
+    # !clean must still work in transcribe mode (commands before the gate)
+    s, body = signed_webhook("bot1", new_payload("!clean",
+                                                 room_token="voicerm001",
+                                                 room_name="Voice Room"))
+    check("!clean still handled in transcribe mode",
+          s == 200 and body.get("handled") == "!clean", str(body))
+
+    # voice message: transcribed + posted, but NOT queued for pi
+    nc_stub.H.file_bytes = wav_bytes
+    s, body = signed_webhook("bot1",
+                             file_payload("", "voicerm001", "Voice Room",
+                                          file_id=77005,
+                                          name="Sprachnachricht 4.wav",
+                                          mimetype="audio/wav"))
+    voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
+    check("wav in transcribe mode: transcribed + posted, NOT queued",
+          s == 200 and body.get("transcribed") is True
+          and body.get("queued") is False
+          and len(nc_stub.H.stt_calls) == n_stt + 1
+          and any(m.startswith("\U0001f442 ") and nc_stub.H.stt_text in m
+                  for m in voic_posts[-2:]),
+          str(body))
+    check("no pi run for a voice message in transcribe mode",
+          _pi_runs() == n_pi, str(_pi_runs()))
+
+    # back to a persona mode: the text is queued for pi again
+    s, body = signed_webhook("bot1", new_payload("!mode office",
+                                                 room_token="voicerm001",
+                                                 room_name="Voice Room"))
+    voic_posts = [m for r, m in nc_stub.H.received if r == "voicerm001"]
+    check("switch back to office works",
+          s == 200 and body.get("handled") == "!mode"
+          and voic_posts[-1].startswith("Mode: office"),
+          str(body) + str(voic_posts[-1:]))
+    nc_stub.H.file_bytes = wav_bytes
+    s, body = signed_webhook("bot1",
+                             file_payload("", "voicerm001", "Voice Room",
+                                          file_id=77006,
+                                          name="Sprachnachricht 5.wav",
+                                          mimetype="audio/wav"))
+    check("voice queued for pi again after switching back",
+          s == 202 and body.get("transcribed") is True
+          and body.get("queued") is True
+          and len(nc_stub.H.stt_calls) == n_stt + 2, str(body))
+    t = wait_room_done("bot1/rooms/voice-room", min_count=3)
+    check("voice task done after switch back",
+          bool(t) and t["status"] == "done", str(t))
