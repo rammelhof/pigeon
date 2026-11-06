@@ -23,7 +23,8 @@ from .nextcloud import (apply_file_param, dav_file_url, payload_file_param,
 from .pi import pi_config_status
 from .room import (BOT_NAME_RE, HELP_TEXT, clean_session_and_workspace,
                    resolve_room_folder, handle_bot_added, handle_bot_removed,
-                   handle_mention_command, handle_memory_command,
+                   handle_github_command, handle_mention_command,
+                   handle_memory_command,
                    handle_mode_command, handle_pw_command,
                    handle_status_command,
                    handle_thinking_command, room_creds,
@@ -179,6 +180,13 @@ def webhook(bot):
     if reply is not None:
         post_message(room, reply)
         return jsonify({"handled": "!pw"}), 200
+
+    # room command: !github [token|clear] — fine-grained PAT for the
+    # github skill (global, stored in .pigeon.json; private rooms only)
+    reply = handle_github_command(message, cwd, room)
+    if reply is not None:
+        post_message(room, reply)
+        return jsonify({"handled": "!github"}), 200
 
     # room command: !clean (+ !c) -> drop the pi sessions AND wipe the
     # workspace, so the next message starts a fresh pi session with no

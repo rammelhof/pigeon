@@ -36,6 +36,9 @@ BOILERPLATE = {
         "model": "",
         "api_key": "",
     },
+    "github": {
+        "token": "",
+    },
 }
 
 

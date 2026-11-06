@@ -23,6 +23,7 @@ from xml.sax.saxutils import unescape
 import requests
 
 from .config import MAX_FILE_SIZE_MB, NEXTCLOUD_URL, TALK_BOT_SECRET, log
+from .github import redact
 from .room import room_creds
 from .security import sign_request
 
@@ -31,7 +32,10 @@ def post_message(room, message, silent=False):
     """Post a chat message via the signed Talk bot API
     (https://nextcloud-talk.readthedocs.io/en/latest/bots/).
     room must be the conversation token. silent=True suppresses chat
-    notifications (the bot API's own 'silent' flag, Talk 17.1+)."""
+    notifications (the bot API's own 'silent' flag, Talk 17.1+).
+    Configured secrets (github token, STT key) are redacted from the
+    text — the model may echo them, the room may not."""
+    message = redact(str(message))
     url = (f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1"
            f"/bot/{room}/message")
     headers = sign_request(TALK_BOT_SECRET, message)  # sign raw message

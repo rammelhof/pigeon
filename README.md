@@ -161,6 +161,15 @@ Nextcloud Talk bot ──POST /webhook/<bot>──> pigeon ──spawns──> p
   When several messages arrive within the batch window they are merged
   into one pi run and only the **last** message gets the silent ack —
   one message per burst, not one per message.
+* **GitHub** (github skill): the bot works on repositories through the
+  `gh` CLI using a fine-grained personal access token that you store
+  with `!github <token>` (private rooms only — the message stays in the
+  room history) or in the `github` section of `.pigeon.json` in the
+  bots folder. The token is injected into pi's environment only
+  (never written into the room workspace) and redacted from anything
+  that is posted back; `!github` shows the status (masked),
+  `!github clear` removes it. The skill never pushes to `main`, never
+  merges and confirms destructive operations.
 * **Bot join & leave**: when the bot is added to a room, pigeon posts a
   one-time greeting; when it is removed (Talk sends a `Leave` webhook),
   pigeon wipes the room entirely — pi sessions, workspace, app password
@@ -339,9 +348,11 @@ webhook message (pigeon stores the room's conversation token in
 pigeon/
   config.py       environment variables + logging
   security.py     webhook/bot-API HMAC signatures, 24h /nc room tokens
+  scheduler.py    schedules.json time math + tick + !schedule command
   room.py         room folders, .room.json (token + app password +
                   mention gate + persona mode), folder disambiguation,
-                  !pw, !clean, !thinking (last-thinking.md), join/leave
+                  !pw, !clean, !thinking (last-thinking.md), join/leave,
+                  !github
   modes/          persona prompts (replace pi's system prompt) + start-prompt instructions (!mode)
   nextcloud.py    bot API posting, WebDAV/CalDAV client
   pi.py           pi config check, bubblewrap sandbox, JSONL run,
@@ -350,13 +361,14 @@ pigeon/
   indicator.py    silent progress-ack post when pi starts
   scheduler.py    schedules.json time math + tick + !schedule command
   skills.py       bundled skill sync into the pi home
+  github.py       .pigeon.json GitHub token + secret redaction for posts
   nc_proxy.py     /nc routes: token-gated Nextcloud proxy for pi
   stt.py          .pigeon.json STT config + voice transcription (wav/mp3)
   web.py          Flask app: /, /health, /webhook/<bot>, startup/shutdown
 wsgi.py           gunicorn WSGI entrypoint + config module (post_fork -> pigeon.web.startup())
 AGENTS.md         instructions for AI agents working on this repo
 skills/           pi skills mounted into the container (scheduler, nextcloud,
-                  container-tools, memory)
+                  container-tools, memory, github)
 Dockerfile        node:24 + python3 + pi image, runs gunicorn
 docker-compose.yml
 .env.example

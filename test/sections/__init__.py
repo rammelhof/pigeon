@@ -12,7 +12,8 @@ SECTIONS = [
                   #     ack rule
     "files",      # file messages (no pw, by id, text event, bad credentials)
     "thinking",   # silent progress ack, thinking never posted
-    "voice",      # STT transcription (wav + mp3)
+    "voice",      # STT transcription (wav + mp3), transcribe mode
+    "github",     # !github token: storage, pi env injection, redaction
     "ncproxy",    # /nc proxy: files + calendar, token auth
     "pipeline",   # ignored events, retry, batch window, heartbeat kill
     "restart",    # restart re-queue, stale disk job scan

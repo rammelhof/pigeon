@@ -171,6 +171,42 @@ def handle_pw_command(message, cwd, room):
     return None
 
 
+# --------------------------------------------------------- !github cmd ----
+# Global (bots folder .pigeon.json, like the STT key): the fine-grained
+# GitHub token for the github skill. Settable from a PRIVATE room only —
+# the token message stays in the room history (Talk bots can post, not
+# edit or delete).
+
+GITHUB_CMD_RE = re.compile(r"^!github\s*$")
+GITHUB_CLEAR_RE = re.compile(r"^!github\s+clear\s*$")
+GITHUB_SET_RE = re.compile(r"^!github\s+(\S+)\s*$")
+
+
+def handle_github_command(message, cwd, room):
+    """Handle !github / !github <token> / !github clear. Returns the
+    reply to post, or None when the message is not a !github command.
+    (The reply is posted via post_message, which redacts any secret.)"""
+    from .github import github_clear, github_set, github_status
+    if GITHUB_CMD_RE.match(message):
+        return github_status()
+    if GITHUB_CLEAR_RE.match(message):
+        github_clear()
+        return "GitHub token removed."
+    m = GITHUB_SET_RE.match(message)
+    if m:
+        token = m.group(1)
+        if len(token) < 16:
+            return "That does not look like a token (too short)."
+        github_set(token)
+        log.info("github token stored via !github (room %s)",
+                 os.path.basename(cwd))
+        return ("GitHub token stored in .pigeon.json. \u26a0\ufe0f This "
+                "message stays in the room history — set the token only "
+                "in a room where you are the only member. Revoking the "
+                "token in GitHub makes the chat copy worthless.")
+    return None
+
+
 # ------------------------------------------------------------ !clean cmd --
 # Stored per room; the command never reaches pi. !clean drops the pi
 # session AND wipes the room's workspace completely (fresh pi session
@@ -532,6 +568,8 @@ HELP_TEXT = (
     "  !memory \u2014 show my long-term memory for this room "
     "(survives !clean)\n"
     "  !pw <user> <app-password> \u2014 enable file access\n"
+    "  !github <token> \u2014 store the GitHub token (private rooms\n"
+    "    only); !github shows status, !github clear removes it\n"
     "  !version (or !v) \u2014 show the pigeon version\n"
     "  !help (or !h) \u2014 this list"
 )

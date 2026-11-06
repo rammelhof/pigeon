@@ -15,7 +15,8 @@ def run():
     stt_json = os.path.join(BOTS_TEST, ".pigeon.json")
     check("startup created the .pigeon.json boilerplate in the bots folder",
           json.load(open(stt_json)) == {
-              "transcription": {"endpoint": "", "model": "", "api_key": ""}},
+              "transcription": {"endpoint": "", "model": "", "api_key": ""},
+              "github": {"token": ""}},
           open(stt_json).read())
 
     s, body = signed_webhook("bot1",

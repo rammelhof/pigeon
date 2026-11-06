@@ -21,6 +21,7 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
 | `pigeon/indicator.py` | Silent progress-ack post when pi starts (one per run) |
 | `pigeon/scheduler.py` | `workspace/schedules.json` engine + `!schedule` command |
 | `pigeon/skills.py` | Bundled skill syncing into the pi config dir |
+| `pigeon/github.py` | GitHub token (.pigeon.json) + secret redaction for posts/logs |
 | `pigeon/stt.py` | Voice message transcription (external STT endpoint) |
 | `pigeon/nc_proxy.py` | `/nc` proxy: bot credentials -> Talk/WebDAV/CalDAV |
 | `pigeon/web.py` | Flask app, webhook parse/dispatch, all room commands |
@@ -41,7 +42,7 @@ state in per-room folders under `$BOTS_DIR`. See `README.md` for user docs.
    import `pi` or `nextcloud` at module level — use local imports).
 4. **Room commands use the `!` prefix** (`!clean`, `!thinking`, `!stop`,
    `!schedule`/`!sch`, `!mention`/`!m`, `!mode`, `!status`, `!memory`, `!pw`,
-   `!help`/`!h`, `!version`/`!v`). Keep the short aliases working.
+   `!github`, `!help`/`!h`, `!version`/`!v`). Keep the short aliases working.
 5. **Tests**: add a check to the matching `test/sections/` module; the check
    helper prints PASS/FAIL and collects failures. New section? Append it to
    `SECTIONS` in `test/sections/__init__.py` (order matters — later sections

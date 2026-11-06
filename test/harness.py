@@ -129,6 +129,22 @@ class FakePopen:
         elif "hang" in prompt and first_attempt:
             self.stdout = self._hang()
             self.stderr = io.StringIO("")
+        elif prompt.startswith("LEAK:"):
+            # pi "replies" with the prompt text — redaction check: the
+            # token must be masked out before anything reaches the chat
+            text = prompt[len("LEAK:"):]
+            self.stdout = iter([
+                json.dumps({"type": "session_header", "id": "f1",
+                            "version": "1"}),
+                json.dumps({"type": "message_end",
+                            "message": {"role": "assistant",
+                                        "content": [
+                                            {"type": "text",
+                                             "text": text}],
+                                        "stopReason": "stop"}}),
+                json.dumps({"type": "agent_settled", "aborted": False}),
+            ])
+            self.stderr = io.StringIO("")
         else:
             # stand-in for pi using the nextcloud skill: call the real
             # /nc proxy with the token bwrap would have setenv'd

@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from .config import (BOTS_DIR, PI_BIN, PI_CONFIG_DIR, SANDBOX, log)
+from .github import github_token, redact
 from .room import mode_start_prompt, mode_text, room_creds
 from .security import nc_token
 
@@ -103,7 +104,25 @@ def pi_command(prompt, session_id, cwd, bot, room, mode=""):
     # Last flag: bwrap stops parsing at the first non-option arg.
     if room_creds(cwd) is not None:
         flags += ["--setenv", "PIGEON_NC_TOKEN", nc_token(bot, room)]
+    # the GitHub token for the github skill — env only, never on disk
+    # in the room workspace (redacted on the way back out, see
+    # github.redact)
+    tok = github_token()
+    if tok:
+        flags += ["--setenv", "GITHUB_TOKEN", tok,
+                  "--setenv", "GH_TOKEN", tok]
     return [bwrap] + flags + pi
+
+
+def pi_env():
+    """Env for a non-sandboxed pi: the inherited env plus the GitHub
+    token (GITHUB_TOKEN / GH_TOKEN) when one is configured."""
+    env = dict(os.environ)
+    tok = github_token()
+    if tok:
+        env["GITHUB_TOKEN"] = tok
+        env["GH_TOKEN"] = tok
+    return env
 
 
 def session_dir(workspace):
@@ -164,13 +183,13 @@ def run_pi_once(task):
     events) and from the authoritative message_end content blocks."""
     cmd = pi_command(task["message"], task["session_id"], task["cwd"],
                      task["bot"], task["room_id"], task.get("mode") or "")
-    log.debug("task %s: running %s", task["id"], " ".join(cmd[:-1]))
+    log.debug("task %s: running %s", task["id"], redact(" ".join(cmd[:-1])))
     # the full prompt (which may be a batched multi-message one) is only
     # interesting for debugging — keep it at debug level
     log.debug("task %s: prompt for session %s (room %s):\n%s",
               task["id"], task["session_id"], task["room_id"],
-              task["message"])
-    proc = subprocess.Popen(cmd, cwd=task["workspace"],
+              redact(task["message"]))
+    proc = subprocess.Popen(cmd, cwd=task["workspace"], env=pi_env(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, start_new_session=True)
     task["proc"] = proc
